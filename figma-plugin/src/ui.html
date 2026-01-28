@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 12px;
+      padding: 16px;
+      background: #ffffff;
+      color: #333;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .logo {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #7C3AED 0%, #DB2777 100%);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    h1 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+
+    .status.disconnected {
+      background: #FEE2E2;
+      color: #991B1B;
+    }
+
+    .status.connecting {
+      background: #FEF3C7;
+      color: #92400E;
+    }
+
+    .status.connected {
+      background: #D1FAE5;
+      color: #065F46;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .status.disconnected .status-dot { background: #DC2626; }
+    .status.connecting .status-dot { background: #F59E0B; animation: pulse 1s infinite; }
+    .status.connected .status-dot { background: #10B981; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .config {
+      background: #F9FAFB;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+
+    .config label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+
+    .config input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #D1D5DB;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .config input:focus {
+      outline: none;
+      border-color: #7C3AED;
+      box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.2);
+    }
+
+    button {
+      width: 100%;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    button.primary {
+      background: #7C3AED;
+      color: white;
+    }
+
+    button.primary:hover {
+      background: #6D28D9;
+    }
+
+    button.secondary {
+      background: #F3F4F6;
+      color: #374151;
+      margin-top: 8px;
+    }
+
+    button.secondary:hover {
+      background: #E5E7EB;
+    }
+
+    .logs {
+      margin-top: 16px;
+    }
+
+    .logs h3 {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #6B7280;
+    }
+
+    .log-container {
+      background: #1F2937;
+      border-radius: 6px;
+      padding: 8px;
+      height: 120px;
+      overflow-y: auto;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 10px;
+    }
+
+    .log-entry {
+      color: #9CA3AF;
+      margin-bottom: 2px;
+    }
+
+    .log-entry.command {
+      color: #60A5FA;
+    }
+
+    .log-entry.success {
+      color: #34D399;
+    }
+
+    .log-entry.error {
+      color: #F87171;
+    }
+
+    .instructions {
+      margin-top: 16px;
+      padding: 12px;
+      background: #EEF2FF;
+      border-radius: 8px;
+      font-size: 11px;
+      color: #4338CA;
+    }
+
+    .instructions h4 {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .instructions code {
+      background: rgba(67, 56, 202, 0.1);
+      padding: 2px 4px;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">C</div>
+    <h1>Claude Design Bridge</h1>
+  </div>
+
+  <div id="status" class="status disconnected">
+    <div class="status-dot"></div>
+    <span id="status-text">Disconnected</span>
+  </div>
+
+  <div class="config">
+    <label for="server-url">MCP Server URL</label>
+    <input type="text" id="server-url" value="ws://localhost:9001" />
+  </div>
+
+  <button id="connect-btn" class="primary">Connect to MCP Server</button>
+  <button id="disconnect-btn" class="secondary" style="display: none;">Disconnect</button>
+
+  <div class="logs">
+    <h3>Activity Log</h3>
+    <div id="log-container" class="log-container">
+      <div class="log-entry">Ready to connect...</div>
+    </div>
+  </div>
+
+  <div class="instructions">
+    <h4>How to use:</h4>
+    <p>1. Start the MCP server: <code>npm run dev</code></p>
+    <p>2. Click "Connect" above</p>
+    <p>3. Use Claude Code to create designs!</p>
+  </div>
+
+  <script>
+    let socket = null;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+
+    const statusEl = document.getElementById('status');
+    const statusTextEl = document.getElementById('status-text');
+    const connectBtn = document.getElementById('connect-btn');
+    const disconnectBtn = document.getElementById('disconnect-btn');
+    const serverUrlInput = document.getElementById('server-url');
+    const logContainer = document.getElementById('log-container');
+
+    function log(message, type = 'info') {
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logContainer.appendChild(entry);
+      logContainer.scrollTop = logContainer.scrollHeight;
+
+      // Keep only last 50 entries
+      while (logContainer.children.length > 50) {
+        logContainer.removeChild(logContainer.firstChild);
+      }
+    }
+
+    function setStatus(status) {
+      statusEl.className = `status ${status}`;
+      switch (status) {
+        case 'connected':
+          statusTextEl.textContent = 'Connected to MCP Server';
+          connectBtn.style.display = 'none';
+          disconnectBtn.style.display = 'block';
+          break;
+        case 'connecting':
+          statusTextEl.textContent = 'Connecting...';
+          break;
+        case 'disconnected':
+          statusTextEl.textContent = 'Disconnected';
+          connectBtn.style.display = 'block';
+          disconnectBtn.style.display = 'none';
+          break;
+      }
+    }
+
+    function connect() {
+      const url = serverUrlInput.value;
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        log('Already connected', 'error');
+        return;
+      }
+
+      setStatus('connecting');
+      log(`Connecting to ${url}...`);
+
+      try {
+        socket = new WebSocket(url);
+
+        socket.onopen = () => {
+          setStatus('connected');
+          log('Connected successfully!', 'success');
+          reconnectAttempts = 0;
+        };
+
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            log(`Command: ${message.command}`, 'command');
+
+            // Forward message to plugin code
+            parent.postMessage({ pluginMessage: message }, '*');
+          } catch (e) {
+            log(`Failed to parse message: ${e.message}`, 'error');
+          }
+        };
+
+        socket.onclose = () => {
+          setStatus('disconnected');
+          log('Disconnected from server');
+
+          // Try to reconnect
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++;
+            log(`Reconnecting (attempt ${reconnectAttempts}/${maxReconnectAttempts})...`);
+            setTimeout(connect, 2000);
+          }
+        };
+
+        socket.onerror = (error) => {
+          log('Connection error', 'error');
+        };
+      } catch (e) {
+        setStatus('disconnected');
+        log(`Failed to connect: ${e.message}`, 'error');
+      }
+    }
+
+    function disconnect() {
+      reconnectAttempts = maxReconnectAttempts; // Prevent auto-reconnect
+      if (socket) {
+        socket.close();
+        socket = null;
+      }
+      setStatus('disconnected');
+      log('Disconnected manually');
+    }
+
+    // Handle responses from plugin code
+    window.onmessage = (event) => {
+      const message = event.data.pluginMessage;
+      if (message && socket && socket.readyState === WebSocket.OPEN) {
+        if (message.error) {
+          log(`Error: ${message.error}`, 'error');
+        } else {
+          log('Command executed successfully', 'success');
+        }
+        socket.send(JSON.stringify(message));
+      }
+    };
+
+    connectBtn.addEventListener('click', connect);
+    disconnectBtn.addEventListener('click', disconnect);
+
+    // Auto-connect on load
+    setTimeout(connect, 500);
+  </script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "Claude Design Bridge",
+  "id": "claude-design-bridge-mcp",
+  "api": "1.0.0",
+  "editorType": ["figma"],
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": ["http://localhost:9001", "ws://localhost:9001"]
+  }
+}

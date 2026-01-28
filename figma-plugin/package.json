@@ -1,0 +1,19 @@
+{
+  "name": "figma-claude-design-bridge",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Figma plugin that connects to Claude Code MCP server for design creation",
+  "scripts": {
+    "build": "npm run build:code && npm run build:ui",
+    "build:code": "esbuild src/code.ts --bundle --outfile=dist/code.js --target=es6",
+    "build:ui": "node scripts/build-ui.js",
+    "watch": "npm run build && chokidar 'src/**/*' -c 'npm run build'",
+    "dev": "npm run build"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.100.0",
+    "chokidar-cli": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
