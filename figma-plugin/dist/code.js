@@ -354,20 +354,25 @@
     };
   }
   function setFillColor(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    if ("fills" in node) {
-      node.fills = [{ type: "SOLID", color: params.color }];
-    } else {
-      throw new Error("Node does not support fills");
-    }
-    return {
-      success: true,
-      nodeId: node.id,
-      color: params.color
-    };
+    return __async(this, null, function* () {
+      const node = yield figma.getNodeByIdAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if ("fills" in node) {
+        if ("setFillStyleIdAsync" in node) {
+          yield node.setFillStyleIdAsync("");
+        }
+        node.fills = [{ type: "SOLID", color: params.color }];
+      } else {
+        throw new Error("Node does not support fills");
+      }
+      return {
+        success: true,
+        nodeId: node.id,
+        color: params.color
+      };
+    });
   }
   function addStroke(params) {
     var _a, _b;
@@ -1186,6 +1191,9 @@
           }
           const sceneNode = node;
           if (params.changes.fillColor && "fills" in sceneNode) {
+            if ("setFillStyleIdAsync" in sceneNode) {
+              yield sceneNode.setFillStyleIdAsync("");
+            }
             sceneNode.fills = [
               { type: "SOLID", color: params.changes.fillColor }
             ];

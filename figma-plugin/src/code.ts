@@ -416,16 +416,21 @@ function resizeNode(params: { nodeId: string; width: number; height: number }) {
   };
 }
 
-function setFillColor(params: {
+async function setFillColor(params: {
   nodeId: string;
   color: { r: number; g: number; b: number };
 }) {
-  const node = findNode(params.nodeId);
+  // Use async lookup to support instance children (IDs like I6:12879;1:595)
+  const node = await figma.getNodeByIdAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
 
   if ("fills" in node) {
+    // Clear any bound fill style first (use async method)
+    if ("setFillStyleIdAsync" in node) {
+      await (node as any).setFillStyleIdAsync("");
+    }
     (node as GeometryMixin).fills = [{ type: "SOLID", color: params.color }];
   } else {
     throw new Error("Node does not support fills");
@@ -1547,6 +1552,10 @@ async function bulkModify(params: {
 
       // Apply fill color
       if (params.changes.fillColor && "fills" in sceneNode) {
+        // Clear any bound fill style first (use async method)
+        if ("setFillStyleIdAsync" in sceneNode) {
+          await (sceneNode as any).setFillStyleIdAsync("");
+        }
         (sceneNode as GeometryMixin).fills = [
           { type: "SOLID", color: params.changes.fillColor },
         ];
