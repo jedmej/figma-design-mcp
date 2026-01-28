@@ -1064,6 +1064,329 @@
       };
     });
   }
+  function exportNode(params) {
+    return __async(this, null, function* () {
+      let node = null;
+      if (params.nodeId) {
+        node = yield figma.getNodeByIdAsync(params.nodeId);
+      } else {
+        const selection = figma.currentPage.selection;
+        if (selection.length > 0) {
+          node = selection[0];
+        }
+      }
+      if (!node) {
+        throw new Error("No node found. Provide a nodeId or select a node in Figma.");
+      }
+      const format = params.format || "PNG";
+      const scale = params.scale || 2;
+      const settings = format === "SVG" ? { format: "SVG" } : format === "PDF" ? { format: "PDF" } : { format, constraint: { type: "SCALE", value: scale } };
+      const bytes = yield node.exportAsync(settings);
+      const base64 = figma.base64Encode(bytes);
+      const mimeTypes = {
+        PNG: "image/png",
+        JPG: "image/jpeg",
+        SVG: "image/svg+xml",
+        PDF: "application/pdf"
+      };
+      return {
+        success: true,
+        nodeId: node.id,
+        nodeName: node.name,
+        format,
+        scale,
+        mimeType: mimeTypes[format],
+        base64,
+        size: {
+          width: node.width,
+          height: node.height
+        }
+      };
+    });
+  }
+  function findNodesFunc(params) {
+    return __async(this, null, function* () {
+      const parent = params.parentId ? yield figma.getNodeByIdAsync(params.parentId) : figma.currentPage;
+      if (!parent || !("findAll" in parent)) {
+        throw new Error("Parent node not found or cannot contain children");
+      }
+      const maxResults = params.maxResults || 100;
+      const results = [];
+      parent.findAll((node) => {
+        var _a;
+        if (results.length >= maxResults) return false;
+        if (params.type && node.type !== params.type) return false;
+        if (params.name && node.name !== params.name) return false;
+        if (params.nameContains && !node.name.includes(params.nameContains)) return false;
+        const sceneNode = node;
+        results.push({
+          id: node.id,
+          name: node.name,
+          type: node.type,
+          parentId: ((_a = node.parent) == null ? void 0 : _a.id) || null,
+          position: { x: sceneNode.x, y: sceneNode.y },
+          size: { width: sceneNode.width, height: sceneNode.height }
+        });
+        return false;
+      });
+      return {
+        success: true,
+        nodes: results,
+        count: results.length,
+        truncated: results.length >= maxResults
+      };
+    });
+  }
+  function getTree(params) {
+    return __async(this, null, function* () {
+      var _a;
+      const maxDepth = (_a = params.depth) != null ? _a : 3;
+      const rootNode = params.nodeId ? yield figma.getNodeByIdAsync(params.nodeId) : figma.currentPage;
+      if (!rootNode) {
+        throw new Error("Node not found");
+      }
+      function buildTree(node, currentDepth) {
+        const sceneNode = node;
+        const result = {
+          id: node.id,
+          name: node.name,
+          type: node.type
+        };
+        if ("x" in sceneNode) {
+          result.position = { x: sceneNode.x, y: sceneNode.y };
+          result.size = { width: sceneNode.width, height: sceneNode.height };
+        }
+        if (node.type === "TEXT") {
+          result.characters = node.characters;
+        }
+        if (currentDepth < maxDepth && "children" in node) {
+          result.children = node.children.map(
+            (child) => buildTree(child, currentDepth + 1)
+          );
+        } else if ("children" in node) {
+          result.childCount = node.children.length;
+        }
+        return result;
+      }
+      return {
+        success: true,
+        tree: buildTree(rootNode, 0)
+      };
+    });
+  }
+  function bulkModify(params) {
+    return __async(this, null, function* () {
+      const results = [];
+      for (const nodeId of params.nodeIds) {
+        try {
+          const node = yield figma.getNodeByIdAsync(nodeId);
+          if (!node) {
+            results.push({ nodeId, success: false, error: "Node not found" });
+            continue;
+          }
+          const sceneNode = node;
+          if (params.changes.fillColor && "fills" in sceneNode) {
+            sceneNode.fills = [
+              { type: "SOLID", color: params.changes.fillColor }
+            ];
+          }
+          if (params.changes.strokeColor && "strokes" in sceneNode) {
+            sceneNode.strokes = [
+              { type: "SOLID", color: params.changes.strokeColor }
+            ];
+          }
+          if (params.changes.strokeWeight !== void 0 && "strokeWeight" in sceneNode) {
+            sceneNode.strokeWeight = params.changes.strokeWeight;
+          }
+          if (params.changes.opacity !== void 0) {
+            sceneNode.opacity = params.changes.opacity;
+          }
+          if (params.changes.cornerRadius !== void 0 && "cornerRadius" in sceneNode) {
+            sceneNode.cornerRadius = params.changes.cornerRadius;
+          }
+          if (params.changes.visible !== void 0) {
+            sceneNode.visible = params.changes.visible;
+          }
+          results.push({ nodeId, success: true });
+        } catch (e) {
+          results.push({
+            nodeId,
+            success: false,
+            error: e instanceof Error ? e.message : String(e)
+          });
+        }
+      }
+      return {
+        success: true,
+        results,
+        modifiedCount: results.filter((r) => r.success).length,
+        failedCount: results.filter((r) => !r.success).length
+      };
+    });
+  }
+  function editComponent(params) {
+    return __async(this, null, function* () {
+      const node = yield figma.getNodeByIdAsync(params.componentId);
+      if (!node) {
+        throw new Error("Component not found");
+      }
+      if (node.type !== "COMPONENT" && node.type !== "COMPONENT_SET") {
+        throw new Error("Node is not a component or component set");
+      }
+      const component = node;
+      if (params.changes.name) {
+        component.name = params.changes.name;
+      }
+      if (params.changes.fillColor && "fills" in component) {
+        component.fills = [
+          { type: "SOLID", color: params.changes.fillColor }
+        ];
+      }
+      if (params.changes.strokeColor && "strokes" in component) {
+        component.strokes = [
+          { type: "SOLID", color: params.changes.strokeColor }
+        ];
+      }
+      if (params.changes.strokeWeight !== void 0 && "strokeWeight" in component) {
+        component.strokeWeight = params.changes.strokeWeight;
+      }
+      if (params.changes.opacity !== void 0) {
+        component.opacity = params.changes.opacity;
+      }
+      if (params.changes.cornerRadius !== void 0 && "cornerRadius" in component) {
+        component.cornerRadius = params.changes.cornerRadius;
+      }
+      const childResults = [];
+      if (params.childChanges && "findAll" in component) {
+        for (const childChange of params.childChanges) {
+          const matchingChildren = component.findAll((child) => {
+            if (childChange.childName && child.name !== childChange.childName) return false;
+            if (childChange.childType && child.type !== childChange.childType) return false;
+            return true;
+          });
+          for (const child of matchingChildren) {
+            try {
+              if (childChange.fillColor && "fills" in child) {
+                child.fills = [
+                  { type: "SOLID", color: childChange.fillColor }
+                ];
+              }
+              if (childChange.text && child.type === "TEXT") {
+                const textNode = child;
+                yield ensureFontLoaded(textNode.fontName);
+                textNode.characters = childChange.text;
+              }
+              if (childChange.fontSize && child.type === "TEXT") {
+                const textNode = child;
+                yield ensureFontLoaded(textNode.fontName);
+                textNode.fontSize = childChange.fontSize;
+              }
+              childResults.push({ name: child.name, success: true });
+            } catch (e) {
+              childResults.push({
+                name: child.name,
+                success: false,
+                error: e instanceof Error ? e.message : String(e)
+              });
+            }
+          }
+        }
+      }
+      let instanceCount = 0;
+      if (node.type === "COMPONENT") {
+        figma.currentPage.findAll((n) => {
+          var _a;
+          if (n.type === "INSTANCE" && ((_a = n.mainComponent) == null ? void 0 : _a.id) === node.id) {
+            instanceCount++;
+          }
+          return false;
+        });
+      }
+      return {
+        success: true,
+        componentId: component.id,
+        componentName: component.name,
+        componentType: component.type,
+        childResults,
+        instancesAffected: instanceCount
+      };
+    });
+  }
+  function analyzeNode(params) {
+    return __async(this, null, function* () {
+      var _a;
+      const node = yield figma.getNodeByIdAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      const sceneNode = node;
+      const parent = node.parent;
+      let parentLayout = null;
+      if (parent && "layoutMode" in parent) {
+        const layoutParent = parent;
+        parentLayout = {
+          mode: layoutParent.layoutMode,
+          spacing: layoutParent.itemSpacing,
+          padding: {
+            top: layoutParent.paddingTop,
+            right: layoutParent.paddingRight,
+            bottom: layoutParent.paddingBottom,
+            left: layoutParent.paddingLeft
+          },
+          alignment: layoutParent.primaryAxisAlignItems,
+          counterAlignment: layoutParent.counterAxisAlignItems
+        };
+      }
+      let ownLayout = null;
+      if ("layoutMode" in sceneNode) {
+        const frameNode = sceneNode;
+        ownLayout = {
+          mode: frameNode.layoutMode,
+          spacing: frameNode.itemSpacing,
+          padding: {
+            top: frameNode.paddingTop,
+            right: frameNode.paddingRight,
+            bottom: frameNode.paddingBottom,
+            left: frameNode.paddingLeft
+          }
+        };
+      }
+      let sizing = null;
+      if ("layoutSizingHorizontal" in sceneNode) {
+        sizing = {
+          horizontal: sceneNode.layoutSizingHorizontal,
+          vertical: sceneNode.layoutSizingVertical
+        };
+      }
+      let constraints = null;
+      if ("constraints" in sceneNode) {
+        constraints = sceneNode.constraints;
+      }
+      const canMove = !parentLayout || parentLayout.mode === "NONE";
+      return {
+        success: true,
+        nodeId: node.id,
+        nodeName: node.name,
+        nodeType: node.type,
+        position: { x: sceneNode.x, y: sceneNode.y },
+        size: { width: sceneNode.width, height: sceneNode.height },
+        parent: parent ? {
+          id: parent.id,
+          name: parent.name,
+          type: parent.type
+        } : null,
+        parentLayout,
+        ownLayout,
+        sizing,
+        constraints,
+        canMove,
+        isComponent: node.type === "COMPONENT",
+        isInstance: node.type === "INSTANCE",
+        isComponentSet: node.type === "COMPONENT_SET",
+        mainComponentId: node.type === "INSTANCE" ? (_a = node.mainComponent) == null ? void 0 : _a.id : null
+      };
+    });
+  }
   var commandHandlers = /* @__PURE__ */ new Map([
     // Creation commands
     ["create_frame", createFrame],
@@ -1112,7 +1435,15 @@
     // Component properties
     ["add_component_property", addComponentProperty],
     ["expose_as_property", exposeAsProperty],
-    ["list_component_properties", listComponentProperties]
+    ["list_component_properties", listComponentProperties],
+    // Export
+    ["export_node", exportNode],
+    // Advanced search & analysis
+    ["find_nodes", findNodesFunc],
+    ["get_tree", getTree],
+    ["bulk_modify", bulkModify],
+    ["edit_component", editComponent],
+    ["analyze_node", analyzeNode]
   ]);
   function createVariants(params) {
     return __async(this, null, function* () {

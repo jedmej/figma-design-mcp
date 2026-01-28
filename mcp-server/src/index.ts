@@ -1218,6 +1218,186 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: "export_node",
+        description:
+          "Export a node as an image (PNG, JPG, SVG, or PDF). Returns base64-encoded data. Uses current selection if no nodeId provided.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeId: {
+              type: "string",
+              description: "ID of the node to export (optional, uses current selection if not provided)",
+            },
+            format: {
+              type: "string",
+              enum: ["PNG", "JPG", "SVG", "PDF"],
+              description: "Export format (default: PNG)",
+            },
+            scale: {
+              type: "number",
+              description: "Scale factor for PNG/JPG exports (default: 2 for 2x resolution)",
+            },
+          },
+        },
+      },
+      {
+        name: "find_nodes",
+        description:
+          "Search for nodes by type, name, or name pattern. Returns matching nodes with their IDs, positions, and sizes. Use this to find specific elements without manual tree traversal.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              description: "Filter by node type (e.g., TEXT, FRAME, RECTANGLE, INSTANCE, COMPONENT)",
+            },
+            name: {
+              type: "string",
+              description: "Filter by exact node name",
+            },
+            nameContains: {
+              type: "string",
+              description: "Filter by partial name match (contains)",
+            },
+            parentId: {
+              type: "string",
+              description: "Search within a specific parent node (default: current page)",
+            },
+            maxResults: {
+              type: "number",
+              description: "Maximum number of results to return (default: 100)",
+            },
+          },
+        },
+      },
+      {
+        name: "get_tree",
+        description:
+          "Get the full node hierarchy in a single call. Returns nested tree structure with node info. Much more efficient than multiple list_nodes calls.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeId: {
+              type: "string",
+              description: "Root node ID to start from (default: current page)",
+            },
+            depth: {
+              type: "number",
+              description: "How many levels deep to traverse (default: 3)",
+            },
+          },
+        },
+      },
+      {
+        name: "bulk_modify",
+        description:
+          "Apply the same changes to multiple nodes at once. Much more efficient than individual set_fill_color calls.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeIds: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of node IDs to modify",
+            },
+            changes: {
+              type: "object",
+              description: "Changes to apply to all nodes",
+              properties: {
+                fillColor: {
+                  type: "object",
+                  description: "Fill color (RGB 0-1)",
+                  properties: {
+                    r: { type: "number" },
+                    g: { type: "number" },
+                    b: { type: "number" },
+                  },
+                },
+                strokeColor: {
+                  type: "object",
+                  description: "Stroke color (RGB 0-1)",
+                  properties: {
+                    r: { type: "number" },
+                    g: { type: "number" },
+                    b: { type: "number" },
+                  },
+                },
+                strokeWeight: { type: "number" },
+                opacity: { type: "number" },
+                cornerRadius: { type: "number" },
+                visible: { type: "boolean" },
+              },
+            },
+          },
+          required: ["nodeIds", "changes"],
+        },
+      },
+      {
+        name: "edit_component",
+        description:
+          "Modify a master component. Changes automatically propagate to all instances. More efficient than modifying instances individually.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            componentId: {
+              type: "string",
+              description: "ID of the component or component set to edit",
+            },
+            changes: {
+              type: "object",
+              description: "Changes to apply to the component itself",
+              properties: {
+                fillColor: {
+                  type: "object",
+                  properties: { r: { type: "number" }, g: { type: "number" }, b: { type: "number" } },
+                },
+                strokeColor: {
+                  type: "object",
+                  properties: { r: { type: "number" }, g: { type: "number" }, b: { type: "number" } },
+                },
+                strokeWeight: { type: "number" },
+                opacity: { type: "number" },
+                cornerRadius: { type: "number" },
+                name: { type: "string" },
+              },
+            },
+            childChanges: {
+              type: "array",
+              description: "Changes to apply to children within the component",
+              items: {
+                type: "object",
+                properties: {
+                  childName: { type: "string", description: "Match children by name" },
+                  childType: { type: "string", description: "Match children by type (e.g., TEXT)" },
+                  fillColor: {
+                    type: "object",
+                    properties: { r: { type: "number" }, g: { type: "number" }, b: { type: "number" } },
+                  },
+                  text: { type: "string", description: "New text content (for TEXT nodes)" },
+                  fontSize: { type: "number" },
+                },
+              },
+            },
+          },
+          required: ["componentId"],
+        },
+      },
+      {
+        name: "analyze_node",
+        description:
+          "Get detailed information about a node including its layout context, parent auto-layout settings, sizing mode, and whether it can be freely positioned. Use this before modifying nodes to understand constraints.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeId: {
+              type: "string",
+              description: "ID of the node to analyze",
+            },
+          },
+          required: ["nodeId"],
+        },
+      },
     ],
   };
 });
@@ -1228,6 +1408,39 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     const result = await sendToFigma(name, args || {});
+
+    // Special handling for export_node - return image content
+    if (name === "export_node" && result.success && result.base64) {
+      const content: any[] = [];
+
+      // Add image if it's a supported image format
+      if (result.mimeType === "image/png" || result.mimeType === "image/jpeg") {
+        content.push({
+          type: "image",
+          data: result.base64,
+          mimeType: result.mimeType,
+        });
+      }
+
+      // Add metadata as text
+      content.push({
+        type: "text",
+        text: JSON.stringify({
+          success: true,
+          nodeId: result.nodeId,
+          nodeName: result.nodeName,
+          format: result.format,
+          scale: result.scale,
+          size: result.size,
+          ...(result.mimeType === "image/svg+xml" || result.mimeType === "application/pdf"
+            ? { base64: result.base64 }
+            : {}),
+        }),
+      });
+
+      return { content };
+    }
+
     return {
       content: [
         {

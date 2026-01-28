@@ -1338,6 +1338,487 @@ async function executeBatch(params: {
 }
 
 // ============================================
+// EXPORT NODE - Screenshot/export functionality
+// ============================================
+
+async function exportNode(params: {
+  nodeId?: string;
+  format?: "PNG" | "JPG" | "SVG" | "PDF";
+  scale?: number;
+}) {
+  let node: SceneNode | null = null;
+
+  // Use provided nodeId or get current selection
+  if (params.nodeId) {
+    node = await figma.getNodeByIdAsync(params.nodeId) as SceneNode | null;
+  } else {
+    const selection = figma.currentPage.selection;
+    if (selection.length > 0) {
+      node = selection[0];
+    }
+  }
+
+  if (!node) {
+    throw new Error("No node found. Provide a nodeId or select a node in Figma.");
+  }
+
+  const format = params.format || "PNG";
+  const scale = params.scale || 2;
+
+  // Export settings
+  const settings: ExportSettings = format === "SVG"
+    ? { format: "SVG" }
+    : format === "PDF"
+    ? { format: "PDF" }
+    : { format: format as "PNG" | "JPG", constraint: { type: "SCALE", value: scale } };
+
+  // Export the node
+  const bytes = await node.exportAsync(settings);
+
+  // Convert to base64
+  const base64 = figma.base64Encode(bytes);
+
+  // Get mime type
+  const mimeTypes: Record<string, string> = {
+    PNG: "image/png",
+    JPG: "image/jpeg",
+    SVG: "image/svg+xml",
+    PDF: "application/pdf",
+  };
+
+  return {
+    success: true,
+    nodeId: node.id,
+    nodeName: node.name,
+    format,
+    scale,
+    mimeType: mimeTypes[format],
+    base64,
+    size: {
+      width: node.width,
+      height: node.height,
+    },
+  };
+}
+
+// ============================================
+// FIND NODES - Search by type, name, or properties
+// ============================================
+
+async function findNodesFunc(params: {
+  type?: string;
+  name?: string;
+  nameContains?: string;
+  parentId?: string;
+  maxResults?: number;
+}) {
+  const parent = params.parentId
+    ? await figma.getNodeByIdAsync(params.parentId)
+    : figma.currentPage;
+
+  if (!parent || !("findAll" in parent)) {
+    throw new Error("Parent node not found or cannot contain children");
+  }
+
+  const maxResults = params.maxResults || 100;
+  const results: Array<{
+    id: string;
+    name: string;
+    type: string;
+    parentId: string | null;
+    position: { x: number; y: number };
+    size: { width: number; height: number };
+  }> = [];
+
+  (parent as ChildrenMixin).findAll((node) => {
+    if (results.length >= maxResults) return false;
+
+    // Filter by type
+    if (params.type && node.type !== params.type) return false;
+
+    // Filter by exact name
+    if (params.name && node.name !== params.name) return false;
+
+    // Filter by name contains
+    if (params.nameContains && !node.name.includes(params.nameContains)) return false;
+
+    const sceneNode = node as SceneNode;
+    results.push({
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      parentId: node.parent?.id || null,
+      position: { x: sceneNode.x, y: sceneNode.y },
+      size: { width: sceneNode.width, height: sceneNode.height },
+    });
+
+    return false; // Continue searching
+  });
+
+  return {
+    success: true,
+    nodes: results,
+    count: results.length,
+    truncated: results.length >= maxResults,
+  };
+}
+
+// ============================================
+// GET TREE - Full hierarchy in one call
+// ============================================
+
+async function getTree(params: {
+  nodeId?: string;
+  depth?: number;
+}) {
+  const maxDepth = params.depth ?? 3;
+
+  const rootNode = params.nodeId
+    ? await figma.getNodeByIdAsync(params.nodeId)
+    : figma.currentPage;
+
+  if (!rootNode) {
+    throw new Error("Node not found");
+  }
+
+  function buildTree(node: BaseNode, currentDepth: number): any {
+    const sceneNode = node as SceneNode;
+    const result: any = {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+    };
+
+    // Add position/size for scene nodes
+    if ("x" in sceneNode) {
+      result.position = { x: sceneNode.x, y: sceneNode.y };
+      result.size = { width: sceneNode.width, height: sceneNode.height };
+    }
+
+    // Add text content for text nodes
+    if (node.type === "TEXT") {
+      result.characters = (node as TextNode).characters;
+    }
+
+    // Recurse into children if within depth limit
+    if (currentDepth < maxDepth && "children" in node) {
+      result.children = (node as ChildrenMixin).children.map((child) =>
+        buildTree(child, currentDepth + 1)
+      );
+    } else if ("children" in node) {
+      result.childCount = (node as ChildrenMixin).children.length;
+    }
+
+    return result;
+  }
+
+  return {
+    success: true,
+    tree: buildTree(rootNode, 0),
+  };
+}
+
+// ============================================
+// BULK MODIFY - Apply changes to multiple nodes
+// ============================================
+
+async function bulkModify(params: {
+  nodeIds: string[];
+  changes: {
+    fillColor?: { r: number; g: number; b: number };
+    strokeColor?: { r: number; g: number; b: number };
+    strokeWeight?: number;
+    opacity?: number;
+    cornerRadius?: number;
+    visible?: boolean;
+  };
+}) {
+  const results: Array<{ nodeId: string; success: boolean; error?: string }> = [];
+
+  for (const nodeId of params.nodeIds) {
+    try {
+      const node = await figma.getNodeByIdAsync(nodeId);
+      if (!node) {
+        results.push({ nodeId, success: false, error: "Node not found" });
+        continue;
+      }
+
+      const sceneNode = node as SceneNode;
+
+      // Apply fill color
+      if (params.changes.fillColor && "fills" in sceneNode) {
+        (sceneNode as GeometryMixin).fills = [
+          { type: "SOLID", color: params.changes.fillColor },
+        ];
+      }
+
+      // Apply stroke color
+      if (params.changes.strokeColor && "strokes" in sceneNode) {
+        (sceneNode as GeometryMixin).strokes = [
+          { type: "SOLID", color: params.changes.strokeColor },
+        ];
+      }
+
+      // Apply stroke weight
+      if (params.changes.strokeWeight !== undefined && "strokeWeight" in sceneNode) {
+        (sceneNode as GeometryMixin).strokeWeight = params.changes.strokeWeight;
+      }
+
+      // Apply opacity
+      if (params.changes.opacity !== undefined) {
+        sceneNode.opacity = params.changes.opacity;
+      }
+
+      // Apply corner radius
+      if (params.changes.cornerRadius !== undefined && "cornerRadius" in sceneNode) {
+        (sceneNode as RectangleNode).cornerRadius = params.changes.cornerRadius;
+      }
+
+      // Apply visibility
+      if (params.changes.visible !== undefined) {
+        sceneNode.visible = params.changes.visible;
+      }
+
+      results.push({ nodeId, success: true });
+    } catch (e) {
+      results.push({
+        nodeId,
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  return {
+    success: true,
+    results,
+    modifiedCount: results.filter((r) => r.success).length,
+    failedCount: results.filter((r) => !r.success).length,
+  };
+}
+
+// ============================================
+// EDIT COMPONENT - Modify master component
+// ============================================
+
+async function editComponent(params: {
+  componentId: string;
+  changes: {
+    fillColor?: { r: number; g: number; b: number };
+    strokeColor?: { r: number; g: number; b: number };
+    strokeWeight?: number;
+    opacity?: number;
+    cornerRadius?: number;
+    name?: string;
+  };
+  childChanges?: Array<{
+    childName?: string;
+    childType?: string;
+    fillColor?: { r: number; g: number; b: number };
+    text?: string;
+    fontSize?: number;
+  }>;
+}) {
+  const node = await figma.getNodeByIdAsync(params.componentId);
+
+  if (!node) {
+    throw new Error("Component not found");
+  }
+
+  if (node.type !== "COMPONENT" && node.type !== "COMPONENT_SET") {
+    throw new Error("Node is not a component or component set");
+  }
+
+  const component = node as ComponentNode | ComponentSetNode;
+
+  // Apply component-level changes
+  if (params.changes.name) {
+    component.name = params.changes.name;
+  }
+
+  if (params.changes.fillColor && "fills" in component) {
+    (component as GeometryMixin).fills = [
+      { type: "SOLID", color: params.changes.fillColor },
+    ];
+  }
+
+  if (params.changes.strokeColor && "strokes" in component) {
+    (component as GeometryMixin).strokes = [
+      { type: "SOLID", color: params.changes.strokeColor },
+    ];
+  }
+
+  if (params.changes.strokeWeight !== undefined && "strokeWeight" in component) {
+    (component as GeometryMixin).strokeWeight = params.changes.strokeWeight;
+  }
+
+  if (params.changes.opacity !== undefined) {
+    component.opacity = params.changes.opacity;
+  }
+
+  if (params.changes.cornerRadius !== undefined && "cornerRadius" in component) {
+    (component as any).cornerRadius = params.changes.cornerRadius;
+  }
+
+  // Apply child changes
+  const childResults: Array<{ name: string; success: boolean; error?: string }> = [];
+
+  if (params.childChanges && "findAll" in component) {
+    for (const childChange of params.childChanges) {
+      const matchingChildren = (component as ChildrenMixin).findAll((child) => {
+        if (childChange.childName && child.name !== childChange.childName) return false;
+        if (childChange.childType && child.type !== childChange.childType) return false;
+        return true;
+      });
+
+      for (const child of matchingChildren) {
+        try {
+          if (childChange.fillColor && "fills" in child) {
+            (child as GeometryMixin).fills = [
+              { type: "SOLID", color: childChange.fillColor },
+            ];
+          }
+
+          if (childChange.text && child.type === "TEXT") {
+            const textNode = child as TextNode;
+            await ensureFontLoaded(textNode.fontName as FontName);
+            textNode.characters = childChange.text;
+          }
+
+          if (childChange.fontSize && child.type === "TEXT") {
+            const textNode = child as TextNode;
+            await ensureFontLoaded(textNode.fontName as FontName);
+            textNode.fontSize = childChange.fontSize;
+          }
+
+          childResults.push({ name: child.name, success: true });
+        } catch (e) {
+          childResults.push({
+            name: child.name,
+            success: false,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+    }
+  }
+
+  // Count instances that will be affected
+  let instanceCount = 0;
+  if (node.type === "COMPONENT") {
+    // Find instances on current page
+    figma.currentPage.findAll((n) => {
+      if (n.type === "INSTANCE" && (n as InstanceNode).mainComponent?.id === node.id) {
+        instanceCount++;
+      }
+      return false;
+    });
+  }
+
+  return {
+    success: true,
+    componentId: component.id,
+    componentName: component.name,
+    componentType: component.type,
+    childResults,
+    instancesAffected: instanceCount,
+  };
+}
+
+// ============================================
+// ANALYZE NODE - Get layout context information
+// ============================================
+
+async function analyzeNode(params: { nodeId: string }) {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
+
+  if (!node) {
+    throw new Error("Node not found");
+  }
+
+  const sceneNode = node as SceneNode;
+  const parent = node.parent;
+
+  // Check if parent has auto-layout
+  let parentLayout: any = null;
+  if (parent && "layoutMode" in parent) {
+    const layoutParent = parent as FrameNode;
+    parentLayout = {
+      mode: layoutParent.layoutMode,
+      spacing: layoutParent.itemSpacing,
+      padding: {
+        top: layoutParent.paddingTop,
+        right: layoutParent.paddingRight,
+        bottom: layoutParent.paddingBottom,
+        left: layoutParent.paddingLeft,
+      },
+      alignment: layoutParent.primaryAxisAlignItems,
+      counterAlignment: layoutParent.counterAxisAlignItems,
+    };
+  }
+
+  // Check node's own layout (if it's a frame)
+  let ownLayout: any = null;
+  if ("layoutMode" in sceneNode) {
+    const frameNode = sceneNode as FrameNode;
+    ownLayout = {
+      mode: frameNode.layoutMode,
+      spacing: frameNode.itemSpacing,
+      padding: {
+        top: frameNode.paddingTop,
+        right: frameNode.paddingRight,
+        bottom: frameNode.paddingBottom,
+        left: frameNode.paddingLeft,
+      },
+    };
+  }
+
+  // Check sizing mode
+  let sizing: any = null;
+  if ("layoutSizingHorizontal" in sceneNode) {
+    sizing = {
+      horizontal: (sceneNode as FrameNode).layoutSizingHorizontal,
+      vertical: (sceneNode as FrameNode).layoutSizingVertical,
+    };
+  }
+
+  // Check constraints
+  let constraints: any = null;
+  if ("constraints" in sceneNode) {
+    constraints = (sceneNode as ConstraintMixin).constraints;
+  }
+
+  // Determine if position is manually controllable
+  const canMove = !parentLayout || parentLayout.mode === "NONE";
+
+  return {
+    success: true,
+    nodeId: node.id,
+    nodeName: node.name,
+    nodeType: node.type,
+    position: { x: sceneNode.x, y: sceneNode.y },
+    size: { width: sceneNode.width, height: sceneNode.height },
+    parent: parent
+      ? {
+          id: parent.id,
+          name: parent.name,
+          type: parent.type,
+        }
+      : null,
+    parentLayout,
+    ownLayout,
+    sizing,
+    constraints,
+    canMove,
+    isComponent: node.type === "COMPONENT",
+    isInstance: node.type === "INSTANCE",
+    isComponentSet: node.type === "COMPONENT_SET",
+    mainComponentId:
+      node.type === "INSTANCE" ? (node as InstanceNode).mainComponent?.id : null,
+  };
+}
+
+// ============================================
 // HANDLER REGISTRY - O(1) command dispatch
 // ============================================
 
@@ -1402,6 +1883,16 @@ const commandHandlers = new Map<string, CommandHandler>([
   ["add_component_property", addComponentProperty],
   ["expose_as_property", exposeAsProperty],
   ["list_component_properties", listComponentProperties],
+
+  // Export
+  ["export_node", exportNode],
+
+  // Advanced search & analysis
+  ["find_nodes", findNodesFunc],
+  ["get_tree", getTree],
+  ["bulk_modify", bulkModify],
+  ["edit_component", editComponent],
+  ["analyze_node", analyzeNode],
 ]);
 
 // Create a component with variants properly (no conflicts)
