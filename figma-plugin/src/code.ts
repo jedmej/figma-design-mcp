@@ -1,131 +1,71 @@
 // Figma Plugin Code - Handles design operations
+// Optimized version with handler registry, font caching, batch operations, and template tools
 
 figma.showUI(__html__, { width: 350, height: 400 });
 
-// Handle messages from the UI (which receives WebSocket commands)
-figma.ui.onmessage = async (msg: {
-  id: string;
-  command: string;
-  params: any;
-}) => {
-  const { id, command, params } = msg;
+// ============================================
+// FONT CACHE - Avoid redundant font loading
+// ============================================
+const loadedFonts = new Set<string>();
 
-  try {
-    let result: any;
+async function ensureFontLoaded(font: FontName): Promise<void> {
+  const key = `${font.family}:${font.style}`;
+  if (loadedFonts.has(key)) return;
+  await figma.loadFontAsync(font);
+  loadedFonts.add(key);
+}
 
-    switch (command) {
-      case "create_frame":
-        result = await createFrame(params);
-        break;
-      case "create_text":
-        result = await createText(params);
-        break;
-      case "create_rectangle":
-        result = await createRectangle(params);
-        break;
-      case "create_ellipse":
-        result = await createEllipse(params);
-        break;
-      case "set_auto_layout":
-        result = await setAutoLayout(params);
-        break;
-      case "create_component":
-        result = await createComponent(params);
-        break;
-      case "create_instance":
-        result = await createInstance(params);
-        break;
-      case "list_nodes":
-        result = listNodes(params);
-        break;
-      case "delete_node":
-        result = deleteNode(params);
-        break;
-      case "move_node":
-        result = moveNode(params);
-        break;
-      case "resize_node":
-        result = resizeNode(params);
-        break;
-      case "set_fill_color":
-        result = setFillColor(params);
-        break;
-      case "add_stroke":
-        result = addStroke(params);
-        break;
-      case "get_selection":
-        result = getSelection();
-        break;
-      case "set_selection":
-        result = setSelection(params);
-        break;
-      case "zoom_to_fit":
-        result = zoomToFit(params);
-        break;
-      case "set_corner_radius":
-        result = setCornerRadius(params);
-        break;
-      case "reparent_node":
-        result = reparentNode(params);
-        break;
-      case "set_sizing_mode":
-        result = setSizingMode(params);
-        break;
-      case "set_text":
-        result = await setText(params);
-        break;
-      case "set_constraints":
-        result = setConstraints(params);
-        break;
-      case "duplicate_node":
-        result = duplicateNode(params);
-        break;
-      case "group_nodes":
-        result = groupNodes(params);
-        break;
-      case "align_nodes":
-        result = alignNodes(params);
-        break;
-      case "distribute_nodes":
-        result = distributeNodes(params);
-        break;
-      case "set_opacity":
-        result = setOpacity(params);
-        break;
-      case "add_effect":
-        result = addEffect(params);
-        break;
-      case "set_text_style":
-        result = await setTextStyle(params);
-        break;
-      default:
-        throw new Error(`Unknown command: ${command}`);
+// Pre-load common fonts on plugin start
+(async () => {
+  const commonFonts: FontName[] = [
+    { family: "Inter", style: "Regular" },
+    { family: "Inter", style: "Medium" },
+    { family: "Inter", style: "Semi Bold" },
+    { family: "Inter", style: "Bold" },
+  ];
+  for (const font of commonFonts) {
+    try {
+      await ensureFontLoaded(font);
+    } catch (e) {
+      // Font may not be available, continue
     }
-
-    figma.ui.postMessage({ id, result });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    figma.ui.postMessage({ id, error: errorMessage });
   }
-};
+})();
 
-// Helper to find node by ID
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
 function findNode(nodeId: string): SceneNode | null {
   return figma.currentPage.findOne((n) => n.id === nodeId) as SceneNode | null;
 }
 
-// Helper to get parent for appending
-function getParent(parentId?: string): (FrameNode | GroupNode | PageNode) {
+function getParent(parentId?: string): FrameNode | GroupNode | PageNode {
   if (parentId) {
     const parent = findNode(parentId);
-    if (parent && ("appendChild" in parent)) {
+    if (parent && "appendChild" in parent) {
       return parent as FrameNode | GroupNode;
     }
   }
   return figma.currentPage;
 }
 
-// Tool implementations
+// Bulk node lookup for multi-node operations
+function findNodes(nodeIds: string[]): Map<string, SceneNode> {
+  const nodeMap = new Map<string, SceneNode>();
+  const idSet = new Set(nodeIds);
+  figma.currentPage.findAll((node) => {
+    if (idSet.has(node.id)) {
+      nodeMap.set(node.id, node as SceneNode);
+    }
+    return false;
+  });
+  return nodeMap;
+}
+
+// ============================================
+// TOOL IMPLEMENTATIONS
+// ============================================
 
 async function createFrame(params: {
   name: string;
@@ -134,6 +74,7 @@ async function createFrame(params: {
   width?: number;
   height?: number;
   fillColor?: { r: number; g: number; b: number };
+  parentId?: string;
 }) {
   const frame = figma.createFrame();
   frame.name = params.name;
@@ -145,7 +86,8 @@ async function createFrame(params: {
     frame.fills = [{ type: "SOLID", color: params.fillColor }];
   }
 
-  figma.currentPage.appendChild(frame);
+  const parent = getParent(params.parentId);
+  parent.appendChild(frame);
 
   return {
     success: true,
@@ -167,10 +109,9 @@ async function createText(params: {
   parentId?: string;
 }) {
   const textNode = figma.createText();
-
-  // Load font before setting text
   const fontWeight = params.fontWeight ?? "Regular";
-  await figma.loadFontAsync({ family: "Inter", style: fontWeight });
+
+  await ensureFontLoaded({ family: "Inter", style: fontWeight });
 
   textNode.fontName = { family: "Inter", style: fontWeight };
   textNode.characters = params.text;
@@ -324,12 +265,45 @@ async function createComponent(params: {
 
   component.name = params.name;
 
+  // Auto-expose all text nodes as properties
+  const exposedProperties: Array<{ name: string; propertyId: string; defaultValue: string }> = [];
+  const textNodes = component.findAll(n => n.type === "TEXT") as TextNode[];
+
+  for (const textNode of textNodes) {
+    // Create a property name from the text node name or content
+    const propName = textNode.name || textNode.characters.slice(0, 20) || "Text";
+    // Make sure property name is unique
+    const uniquePropName = exposedProperties.find(p => p.name === propName)
+      ? `${propName} ${exposedProperties.length + 1}`
+      : propName;
+
+    try {
+      const propertyId = component.addComponentProperty(
+        uniquePropName,
+        "TEXT",
+        textNode.characters
+      );
+      textNode.componentPropertyReferences = {
+        ...textNode.componentPropertyReferences,
+        characters: propertyId,
+      };
+      exposedProperties.push({
+        name: uniquePropName,
+        propertyId,
+        defaultValue: textNode.characters,
+      });
+    } catch (e) {
+      // Skip if property can't be added
+    }
+  }
+
   return {
     success: true,
     nodeId: component.id,
     name: component.name,
     type: component.type,
     size: { width: component.width, height: component.height },
+    exposedProperties,
   };
 }
 
@@ -504,13 +478,10 @@ function getSelection() {
 }
 
 function setSelection(params: { nodeIds: string[] }) {
-  const nodes: SceneNode[] = [];
-  for (const id of params.nodeIds) {
-    const node = findNode(id);
-    if (node) {
-      nodes.push(node);
-    }
-  }
+  const nodeMap = findNodes(params.nodeIds);
+  const nodes = params.nodeIds
+    .map((id) => nodeMap.get(id))
+    .filter((n): n is SceneNode => n !== undefined);
 
   figma.currentPage.selection = nodes;
 
@@ -524,9 +495,10 @@ function zoomToFit(params: { nodeIds?: string[] }) {
   let nodes: readonly SceneNode[];
 
   if (params.nodeIds && params.nodeIds.length > 0) {
+    const nodeMap = findNodes(params.nodeIds);
     nodes = params.nodeIds
-      .map((id) => findNode(id))
-      .filter((n): n is SceneNode => n !== null);
+      .map((id) => nodeMap.get(id))
+      .filter((n): n is SceneNode => n !== undefined);
   } else {
     nodes = figma.currentPage.selection;
   }
@@ -590,7 +562,7 @@ function reparentNode(params: { nodeId: string; newParentId: string; index?: num
 function setSizingMode(params: {
   nodeId: string;
   horizontal?: "FIXED" | "FILL" | "HUG";
-  vertical?: "FIXED" | "FILL" | "HUG"
+  vertical?: "FIXED" | "FILL" | "HUG";
 }) {
   const node = findNode(params.nodeId);
   if (!node) {
@@ -629,9 +601,7 @@ async function setText(params: { nodeId: string; text: string }) {
   }
 
   const textNode = node as TextNode;
-
-  // Load the current font before changing text
-  await figma.loadFontAsync(textNode.fontName as FontName);
+  await ensureFontLoaded(textNode.fontName as FontName);
   textNode.characters = params.text;
 
   return {
@@ -685,13 +655,10 @@ function duplicateNode(params: { nodeId: string; offsetX?: number; offsetY?: num
 }
 
 function groupNodes(params: { nodeIds: string[]; name?: string }) {
-  const nodes: SceneNode[] = [];
-  for (const id of params.nodeIds) {
-    const node = findNode(id);
-    if (node) {
-      nodes.push(node);
-    }
-  }
+  const nodeMap = findNodes(params.nodeIds);
+  const nodes = params.nodeIds
+    .map((id) => nodeMap.get(id))
+    .filter((n): n is SceneNode => n !== undefined);
 
   if (nodes.length < 2) {
     throw new Error("Need at least 2 nodes to group");
@@ -712,19 +679,15 @@ function alignNodes(params: {
   nodeIds: string[];
   alignment: "LEFT" | "CENTER_H" | "RIGHT" | "TOP" | "CENTER_V" | "BOTTOM";
 }) {
-  const nodes: SceneNode[] = [];
-  for (const id of params.nodeIds) {
-    const node = findNode(id);
-    if (node) {
-      nodes.push(node);
-    }
-  }
+  const nodeMap = findNodes(params.nodeIds);
+  const nodes = params.nodeIds
+    .map((id) => nodeMap.get(id))
+    .filter((n): n is SceneNode => n !== undefined);
 
   if (nodes.length < 2) {
     throw new Error("Need at least 2 nodes to align");
   }
 
-  // Calculate bounds
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const node of nodes) {
     minX = Math.min(minX, node.x);
@@ -771,19 +734,15 @@ function distributeNodes(params: {
   direction: "HORIZONTAL" | "VERTICAL";
   spacing?: number;
 }) {
-  const nodes: SceneNode[] = [];
-  for (const id of params.nodeIds) {
-    const node = findNode(id);
-    if (node) {
-      nodes.push(node);
-    }
-  }
+  const nodeMap = findNodes(params.nodeIds);
+  const nodes = params.nodeIds
+    .map((id) => nodeMap.get(id))
+    .filter((n): n is SceneNode => n !== undefined);
 
   if (nodes.length < 2) {
     throw new Error("Need at least 2 nodes to distribute");
   }
 
-  // Sort by position
   if (params.direction === "HORIZONTAL") {
     nodes.sort((a, b) => a.x - b.x);
   } else {
@@ -791,7 +750,6 @@ function distributeNodes(params: {
   }
 
   if (params.spacing !== undefined) {
-    // Fixed spacing
     let currentPos = params.direction === "HORIZONTAL" ? nodes[0].x : nodes[0].y;
     for (const node of nodes) {
       if (params.direction === "HORIZONTAL") {
@@ -803,7 +761,6 @@ function distributeNodes(params: {
       }
     }
   } else {
-    // Equal distribution
     const first = nodes[0];
     const last = nodes[nodes.length - 1];
 
@@ -917,7 +874,7 @@ async function setTextStyle(params: {
   }
 
   const textNode = node as TextNode;
-  await figma.loadFontAsync(textNode.fontName as FontName);
+  await ensureFontLoaded(textNode.fontName as FontName);
 
   if (params.textAlign) {
     textNode.textAlignHorizontal = params.textAlign;
@@ -925,10 +882,8 @@ async function setTextStyle(params: {
 
   if (params.lineHeight !== undefined) {
     if (params.lineHeight < 10) {
-      // Percentage
       textNode.lineHeight = { value: params.lineHeight * 100, unit: "PERCENT" };
     } else {
-      // Pixels
       textNode.lineHeight = { value: params.lineHeight, unit: "PIXELS" };
     }
   }
@@ -947,3 +902,874 @@ async function setTextStyle(params: {
     textAlign: textNode.textAlignHorizontal,
   };
 }
+
+// ============================================
+// TEMPLATE TOOLS - High-level UI components
+// ============================================
+
+// Button size and variant presets
+const buttonSizes = {
+  sm: { paddingH: 12, paddingV: 6, fontSize: 12 },
+  md: { paddingH: 16, paddingV: 10, fontSize: 14 },
+  lg: { paddingH: 24, paddingV: 14, fontSize: 16 },
+};
+
+const buttonVariants = {
+  primary: { fill: { r: 0.3, g: 0.45, b: 0.95 }, text: { r: 1, g: 1, b: 1 }, stroke: null },
+  secondary: { fill: { r: 0.95, g: 0.95, b: 0.97 }, text: { r: 0.2, g: 0.2, b: 0.25 }, stroke: null },
+  outline: { fill: null, text: { r: 0.3, g: 0.45, b: 0.95 }, stroke: { r: 0.3, g: 0.45, b: 0.95 } },
+  ghost: { fill: null, text: { r: 0.3, g: 0.45, b: 0.95 }, stroke: null },
+};
+
+async function createButton(params: {
+  text: string;
+  x?: number;
+  y?: number;
+  variant?: "primary" | "secondary" | "outline" | "ghost";
+  size?: "sm" | "md" | "lg";
+  fillColor?: { r: number; g: number; b: number };
+  textColor?: { r: number; g: number; b: number };
+  cornerRadius?: number;
+  parentId?: string;
+}) {
+  const variant = buttonVariants[params.variant ?? "primary"];
+  const size = buttonSizes[params.size ?? "md"];
+
+  const frame = figma.createFrame();
+  frame.name = `Button: ${params.text}`;
+  frame.x = params.x ?? 0;
+  frame.y = params.y ?? 0;
+
+  // Set auto-layout
+  frame.layoutMode = "HORIZONTAL";
+  frame.primaryAxisAlignItems = "CENTER";
+  frame.counterAxisAlignItems = "CENTER";
+  frame.paddingLeft = frame.paddingRight = size.paddingH;
+  frame.paddingTop = frame.paddingBottom = size.paddingV;
+  frame.layoutSizingHorizontal = "HUG";
+  frame.layoutSizingVertical = "HUG";
+
+  // Set fill
+  const fillColor = params.fillColor ?? variant.fill;
+  if (fillColor) {
+    frame.fills = [{ type: "SOLID", color: fillColor }];
+  } else {
+    frame.fills = [];
+  }
+
+  // Set corner radius
+  frame.cornerRadius = params.cornerRadius ?? 8;
+
+  // Add stroke if needed
+  if (variant.stroke) {
+    frame.strokes = [{ type: "SOLID", color: variant.stroke }];
+    frame.strokeWeight = 1;
+  }
+
+  // Create text
+  const textColor = params.textColor ?? variant.text;
+  await ensureFontLoaded({ family: "Inter", style: "Medium" });
+
+  const textNode = figma.createText();
+  textNode.fontName = { family: "Inter", style: "Medium" };
+  textNode.characters = params.text;
+  textNode.fontSize = size.fontSize;
+  textNode.fills = [{ type: "SOLID", color: textColor }];
+
+  frame.appendChild(textNode);
+
+  const parent = getParent(params.parentId);
+  parent.appendChild(frame);
+
+  return {
+    success: true,
+    nodeId: frame.id,
+    textNodeId: textNode.id,
+    name: frame.name,
+    size: { width: frame.width, height: frame.height },
+  };
+}
+
+async function createCard(params: {
+  name: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  header?: { title?: string; subtitle?: string };
+  body?: { text?: string; imagePlaceholder?: boolean };
+  footer?: { primaryAction?: string; secondaryAction?: string };
+  fillColor?: { r: number; g: number; b: number };
+  cornerRadius?: number;
+  shadow?: boolean;
+  parentId?: string;
+}) {
+  const width = params.width ?? 320;
+
+  const card = figma.createFrame();
+  card.name = params.name;
+  card.x = params.x ?? 0;
+  card.y = params.y ?? 0;
+  card.resize(width, 100);
+
+  card.layoutMode = "VERTICAL";
+  card.itemSpacing = 0;
+  card.layoutSizingHorizontal = "FIXED";
+  card.layoutSizingVertical = "HUG";
+
+  card.fills = [{ type: "SOLID", color: params.fillColor ?? { r: 1, g: 1, b: 1 } }];
+  card.cornerRadius = params.cornerRadius ?? 12;
+
+  if (params.shadow !== false) {
+    card.effects = [{
+      type: "DROP_SHADOW",
+      color: { r: 0, g: 0, b: 0, a: 0.1 },
+      offset: { x: 0, y: 4 },
+      radius: 12,
+      spread: 0,
+      visible: true,
+      blendMode: "NORMAL",
+    }];
+  }
+
+  const createdIds: Record<string, string> = { cardId: card.id };
+
+  await ensureFontLoaded({ family: "Inter", style: "Semi Bold" });
+  await ensureFontLoaded({ family: "Inter", style: "Regular" });
+
+  // Header section
+  if (params.header) {
+    const header = figma.createFrame();
+    header.name = "Header";
+    header.layoutMode = "VERTICAL";
+    header.itemSpacing = 4;
+    header.paddingTop = header.paddingBottom = 16;
+    header.paddingLeft = header.paddingRight = 16;
+    header.fills = [];
+
+    if (params.header.title) {
+      const title = figma.createText();
+      title.fontName = { family: "Inter", style: "Semi Bold" };
+      title.characters = params.header.title;
+      title.fontSize = 18;
+      title.fills = [{ type: "SOLID", color: { r: 0.1, g: 0.1, b: 0.1 } }];
+      header.appendChild(title);
+      title.layoutSizingHorizontal = "FILL";
+      createdIds.titleId = title.id;
+    }
+
+    if (params.header.subtitle) {
+      const subtitle = figma.createText();
+      subtitle.fontName = { family: "Inter", style: "Regular" };
+      subtitle.characters = params.header.subtitle;
+      subtitle.fontSize = 14;
+      subtitle.fills = [{ type: "SOLID", color: { r: 0.4, g: 0.4, b: 0.4 } }];
+      header.appendChild(subtitle);
+      subtitle.layoutSizingHorizontal = "FILL";
+      createdIds.subtitleId = subtitle.id;
+    }
+
+    card.appendChild(header);
+    header.layoutSizingHorizontal = "FILL";
+    header.layoutSizingVertical = "HUG";
+    createdIds.headerId = header.id;
+  }
+
+  // Body section
+  if (params.body) {
+    const body = figma.createFrame();
+    body.name = "Body";
+    body.layoutMode = "VERTICAL";
+    body.itemSpacing = 12;
+    body.paddingTop = body.paddingBottom = 16;
+    body.paddingLeft = body.paddingRight = 16;
+    body.fills = [];
+
+    if (params.body.imagePlaceholder) {
+      const placeholder = figma.createRectangle();
+      placeholder.name = "Image Placeholder";
+      placeholder.resize(width - 32, 160);
+      placeholder.fills = [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9 } }];
+      placeholder.cornerRadius = 8;
+      body.appendChild(placeholder);
+      placeholder.layoutSizingHorizontal = "FILL";
+      createdIds.imagePlaceholderId = placeholder.id;
+    }
+
+    if (params.body.text) {
+      const text = figma.createText();
+      text.fontName = { family: "Inter", style: "Regular" };
+      text.characters = params.body.text;
+      text.fontSize = 14;
+      text.fills = [{ type: "SOLID", color: { r: 0.3, g: 0.3, b: 0.3 } }];
+      body.appendChild(text);
+      text.layoutSizingHorizontal = "FILL";
+      createdIds.bodyTextId = text.id;
+    }
+
+    card.appendChild(body);
+    body.layoutSizingHorizontal = "FILL";
+    body.layoutSizingVertical = "HUG";
+    createdIds.bodyId = body.id;
+  }
+
+  // Footer section
+  if (params.footer) {
+    const footer = figma.createFrame();
+    footer.name = "Footer";
+    footer.layoutMode = "HORIZONTAL";
+    footer.itemSpacing = 8;
+    footer.paddingTop = footer.paddingBottom = 12;
+    footer.paddingLeft = footer.paddingRight = 16;
+    footer.primaryAxisAlignItems = "MAX";
+    footer.fills = [];
+
+    footer.strokes = [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9 } }];
+    footer.strokeWeight = 1;
+    footer.strokeAlign = "INSIDE";
+
+    if (params.footer.secondaryAction) {
+      const btn = await createButton({
+        text: params.footer.secondaryAction,
+        variant: "ghost",
+        size: "sm",
+      });
+      const btnNode = await figma.getNodeByIdAsync(btn.nodeId) as FrameNode;
+      footer.appendChild(btnNode);
+      createdIds.secondaryButtonId = btn.nodeId;
+    }
+
+    if (params.footer.primaryAction) {
+      const btn = await createButton({
+        text: params.footer.primaryAction,
+        variant: "primary",
+        size: "sm",
+      });
+      const btnNode = await figma.getNodeByIdAsync(btn.nodeId) as FrameNode;
+      footer.appendChild(btnNode);
+      createdIds.primaryButtonId = btn.nodeId;
+    }
+
+    card.appendChild(footer);
+    footer.layoutSizingHorizontal = "FILL";
+    footer.layoutSizingVertical = "HUG";
+    createdIds.footerId = footer.id;
+  }
+
+  const parent = getParent(params.parentId);
+  parent.appendChild(card);
+
+  return {
+    success: true,
+    ...createdIds,
+    name: card.name,
+    size: { width: card.width, height: card.height },
+  };
+}
+
+async function createInput(params: {
+  label?: string;
+  placeholder: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  type?: "text" | "email" | "password" | "search";
+  required?: boolean;
+  parentId?: string;
+}) {
+  const width = params.width ?? 280;
+
+  const container = figma.createFrame();
+  container.name = `Input: ${params.label ?? params.placeholder}`;
+  container.x = params.x ?? 0;
+  container.y = params.y ?? 0;
+  container.layoutMode = "VERTICAL";
+  container.itemSpacing = 6;
+  container.layoutSizingHorizontal = "HUG";
+  container.layoutSizingVertical = "HUG";
+  container.fills = [];
+
+  const createdIds: Record<string, string> = { containerId: container.id };
+
+  await ensureFontLoaded({ family: "Inter", style: "Medium" });
+  await ensureFontLoaded({ family: "Inter", style: "Regular" });
+
+  // Label
+  if (params.label) {
+    const labelFrame = figma.createFrame();
+    labelFrame.layoutMode = "HORIZONTAL";
+    labelFrame.itemSpacing = 4;
+    labelFrame.layoutSizingHorizontal = "HUG";
+    labelFrame.layoutSizingVertical = "HUG";
+    labelFrame.fills = [];
+
+    const label = figma.createText();
+    label.fontName = { family: "Inter", style: "Medium" };
+    label.characters = params.label;
+    label.fontSize = 14;
+    label.fills = [{ type: "SOLID", color: { r: 0.2, g: 0.2, b: 0.2 } }];
+    labelFrame.appendChild(label);
+    createdIds.labelId = label.id;
+
+    if (params.required) {
+      const asterisk = figma.createText();
+      asterisk.fontName = { family: "Inter", style: "Medium" };
+      asterisk.characters = "*";
+      asterisk.fontSize = 14;
+      asterisk.fills = [{ type: "SOLID", color: { r: 0.9, g: 0.3, b: 0.3 } }];
+      labelFrame.appendChild(asterisk);
+    }
+
+    container.appendChild(labelFrame);
+  }
+
+  // Input field
+  const inputFrame = figma.createFrame();
+  inputFrame.name = "Input Field";
+  inputFrame.resize(width, 40);
+  inputFrame.layoutMode = "HORIZONTAL";
+  inputFrame.paddingLeft = inputFrame.paddingRight = 12;
+  inputFrame.counterAxisAlignItems = "CENTER";
+  inputFrame.layoutSizingHorizontal = "FIXED";
+  inputFrame.layoutSizingVertical = "FIXED";
+  inputFrame.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+  inputFrame.strokes = [{ type: "SOLID", color: { r: 0.85, g: 0.85, b: 0.85 } }];
+  inputFrame.strokeWeight = 1;
+  inputFrame.cornerRadius = 8;
+
+  if (params.type === "search") {
+    const iconPlaceholder = figma.createRectangle();
+    iconPlaceholder.name = "Search Icon";
+    iconPlaceholder.resize(16, 16);
+    iconPlaceholder.fills = [{ type: "SOLID", color: { r: 0.6, g: 0.6, b: 0.6 } }];
+    iconPlaceholder.cornerRadius = 2;
+    inputFrame.appendChild(iconPlaceholder);
+    inputFrame.itemSpacing = 8;
+  }
+
+  const placeholderText = figma.createText();
+  placeholderText.fontName = { family: "Inter", style: "Regular" };
+  placeholderText.characters = params.placeholder;
+  placeholderText.fontSize = 14;
+  placeholderText.fills = [{ type: "SOLID", color: { r: 0.6, g: 0.6, b: 0.6 } }];
+  placeholderText.layoutSizingHorizontal = "FILL";
+  inputFrame.appendChild(placeholderText);
+  createdIds.placeholderTextId = placeholderText.id;
+
+  container.appendChild(inputFrame);
+  createdIds.inputFrameId = inputFrame.id;
+
+  const parent = getParent(params.parentId);
+  parent.appendChild(container);
+
+  return {
+    success: true,
+    ...createdIds,
+    name: container.name,
+    size: { width: container.width, height: container.height },
+  };
+}
+
+// ============================================
+// BATCH OPERATIONS - Execute multiple commands
+// ============================================
+
+function resolveReferences(params: any, resultMap: Map<string, any>): any {
+  if (typeof params === "string" && params.startsWith("$ref:")) {
+    const path = params.slice(5); // Remove "$ref:"
+    const [id, ...fields] = path.split(".");
+    let value = resultMap.get(id);
+    for (const field of fields) {
+      value = value?.[field];
+    }
+    return value;
+  }
+
+  if (Array.isArray(params)) {
+    return params.map((p) => resolveReferences(p, resultMap));
+  }
+
+  if (params && typeof params === "object") {
+    const resolved: Record<string, any> = {};
+    for (const [key, value] of Object.entries(params)) {
+      resolved[key] = resolveReferences(value, resultMap);
+    }
+    return resolved;
+  }
+
+  return params;
+}
+
+async function executeBatch(params: {
+  commands: Array<{ command: string; params: any; id?: string }>;
+}) {
+  const results: any[] = [];
+  const resultMap = new Map<string, any>();
+
+  for (const cmd of params.commands) {
+    try {
+      const resolvedParams = resolveReferences(cmd.params, resultMap);
+      const handler = commandHandlers.get(cmd.command);
+
+      if (!handler) {
+        results.push({ success: false, error: `Unknown command: ${cmd.command}` });
+        continue;
+      }
+
+      const cmdResult = await handler(resolvedParams);
+      results.push(cmdResult);
+
+      if (cmd.id) {
+        resultMap.set(cmd.id, cmdResult);
+      }
+    } catch (error) {
+      results.push({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    success: true,
+    results,
+    executedCount: results.length,
+    successCount: results.filter((r) => r.success).length,
+  };
+}
+
+// ============================================
+// HANDLER REGISTRY - O(1) command dispatch
+// ============================================
+
+type CommandHandler = (params: any) => Promise<any> | any;
+
+const commandHandlers = new Map<string, CommandHandler>([
+  // Creation commands
+  ["create_frame", createFrame],
+  ["create_text", createText],
+  ["create_rectangle", createRectangle],
+  ["create_ellipse", createEllipse],
+  ["create_component", createComponent],
+  ["create_instance", createInstance],
+
+  // Layout commands
+  ["set_auto_layout", setAutoLayout],
+  ["set_sizing_mode", setSizingMode],
+  ["set_constraints", setConstraints],
+
+  // Modification commands
+  ["move_node", moveNode],
+  ["resize_node", resizeNode],
+  ["set_fill_color", setFillColor],
+  ["add_stroke", addStroke],
+  ["set_corner_radius", setCornerRadius],
+  ["set_opacity", setOpacity],
+  ["add_effect", addEffect],
+
+  // Text commands
+  ["set_text", setText],
+  ["set_text_style", setTextStyle],
+
+  // Organization commands
+  ["reparent_node", reparentNode],
+  ["duplicate_node", duplicateNode],
+  ["group_nodes", groupNodes],
+  ["delete_node", deleteNode],
+
+  // Multi-node commands
+  ["align_nodes", alignNodes],
+  ["distribute_nodes", distributeNodes],
+
+  // Query commands
+  ["list_nodes", listNodes],
+  ["get_selection", getSelection],
+  ["set_selection", setSelection],
+  ["zoom_to_fit", zoomToFit],
+
+  // Template commands
+  ["create_button", createButton],
+  ["create_card", createCard],
+  ["create_input", createInput],
+
+  // Batch command
+  ["batch", executeBatch],
+
+  // Component set command
+  ["combine_as_variants", combineAsVariants],
+  ["create_variants", createVariants],
+
+  // Component properties
+  ["add_component_property", addComponentProperty],
+  ["expose_as_property", exposeAsProperty],
+  ["list_component_properties", listComponentProperties],
+]);
+
+// Create a component with variants properly (no conflicts)
+async function createVariants(params: {
+  baseNodeId: string;
+  propertyName: string;
+  variants: Array<{
+    name: string;
+    fillColor?: { r: number; g: number; b: number };
+    textColor?: { r: number; g: number; b: number };
+    opacity?: number;
+    strokeColor?: { r: number; g: number; b: number };
+    strokeWeight?: number;
+  }>;
+  componentSetName?: string;
+}) {
+  const baseNode = await figma.getNodeByIdAsync(params.baseNodeId);
+  if (!baseNode) {
+    throw new Error("Base node not found");
+  }
+
+  const componentIds: string[] = [];
+  const propertyName = params.propertyName;
+  const baseSceneNode = baseNode as SceneNode;
+  const baseX = baseSceneNode.x;
+  const baseWidth = baseSceneNode.width;
+
+  // Clone ALL variants first to avoid node destruction issues
+  const clones: SceneNode[] = [];
+  for (let i = 0; i < params.variants.length; i++) {
+    const clone = baseSceneNode.clone();
+    clone.x = baseX + (i * (baseWidth + 20));
+    clones.push(clone);
+  }
+
+  // Remove the original base node since we cloned it
+  baseSceneNode.remove();
+
+  // Now process each clone
+  for (let i = 0; i < params.variants.length; i++) {
+    const variant = params.variants[i];
+    const node = clones[i];
+
+    // Apply variant-specific styles
+    if (variant.fillColor && "fills" in node) {
+      (node as GeometryMixin).fills = [{ type: "SOLID", color: variant.fillColor }];
+    }
+
+    if (variant.opacity !== undefined) {
+      node.opacity = variant.opacity;
+    }
+
+    if (variant.strokeColor && "strokes" in node) {
+      (node as GeometryMixin).strokes = [{ type: "SOLID", color: variant.strokeColor }];
+      if (variant.strokeWeight) {
+        (node as GeometryMixin).strokeWeight = variant.strokeWeight;
+      }
+    }
+
+    // Apply text color to all text children if specified
+    if (variant.textColor && "findAll" in node) {
+      const textNodes = (node as FrameNode).findAll(n => n.type === "TEXT") as TextNode[];
+      for (const textNode of textNodes) {
+        textNode.fills = [{ type: "SOLID", color: variant.textColor }];
+      }
+    }
+
+    // Create component with proper Property=Value naming
+    const variantName = `${propertyName}=${variant.name}`;
+    const component = figma.createComponentFromNode(node);
+    component.name = variantName;
+    componentIds.push(component.id);
+  }
+
+  // Combine all components as variants
+  const components: ComponentNode[] = [];
+  for (const id of componentIds) {
+    const comp = await figma.getNodeByIdAsync(id);
+    if (comp && comp.type === "COMPONENT") {
+      components.push(comp as ComponentNode);
+    }
+  }
+
+  const componentSet = figma.combineAsVariants(components, figma.currentPage);
+  componentSet.name = params.componentSetName || "Component";
+
+  // Auto-expose text properties on the component set
+  // Find text nodes in the first variant and expose them
+  const exposedProperties: Array<{ name: string; propertyId: string; defaultValue: string }> = [];
+  const firstVariant = components[0];
+  const textNodesInFirst = firstVariant.findAll(n => n.type === "TEXT") as TextNode[];
+
+  for (const textNode of textNodesInFirst) {
+    const propName = textNode.name || textNode.characters.slice(0, 20) || "Text";
+    const uniquePropName = exposedProperties.find(p => p.name === propName)
+      ? `${propName} ${exposedProperties.length + 1}`
+      : propName;
+
+    try {
+      const propertyId = componentSet.addComponentProperty(
+        uniquePropName,
+        "TEXT",
+        textNode.characters
+      );
+
+      // Link text nodes in ALL variants to this property
+      for (const comp of components) {
+        const matchingTextNodes = comp.findAll(n => n.type === "TEXT" && n.name === textNode.name) as TextNode[];
+        for (const tn of matchingTextNodes) {
+          tn.componentPropertyReferences = {
+            ...tn.componentPropertyReferences,
+            characters: propertyId,
+          };
+        }
+      }
+
+      exposedProperties.push({
+        name: uniquePropName,
+        propertyId,
+        defaultValue: textNode.characters,
+      });
+    } catch (e) {
+      // Skip if property can't be added
+    }
+  }
+
+  return {
+    success: true,
+    componentSetId: componentSet.id,
+    componentSetName: componentSet.name,
+    propertyName: propertyName,
+    variants: params.variants.map((v, i) => ({
+      name: v.name,
+      componentId: componentIds[i],
+    })),
+    variantCount: componentIds.length,
+    exposedProperties,
+  };
+}
+
+// Add a property to a component or component set
+async function addComponentProperty(params: {
+  componentId: string;
+  propertyName: string;
+  propertyType: "TEXT" | "BOOLEAN" | "INSTANCE_SWAP" | "VARIANT";
+  defaultValue: string | boolean;
+  variantOptions?: string[]; // For VARIANT type
+}) {
+  const node = await figma.getNodeByIdAsync(params.componentId);
+  if (!node || (node.type !== "COMPONENT" && node.type !== "COMPONENT_SET")) {
+    throw new Error("Node is not a component or component set");
+  }
+
+  const component = node as ComponentNode | ComponentSetNode;
+
+  let propertyId: string;
+
+  if (params.propertyType === "VARIANT" && params.variantOptions) {
+    propertyId = component.addComponentProperty(
+      params.propertyName,
+      "VARIANT",
+      params.defaultValue as string,
+      { variantOptions: params.variantOptions }
+    );
+  } else {
+    propertyId = component.addComponentProperty(
+      params.propertyName,
+      params.propertyType,
+      params.defaultValue
+    );
+  }
+
+  return {
+    success: true,
+    componentId: component.id,
+    propertyName: params.propertyName,
+    propertyType: params.propertyType,
+    propertyId,
+  };
+}
+
+// Expose a layer (like text) as an editable component property
+async function exposeAsProperty(params: {
+  componentId: string;
+  layerId: string;
+  propertyName: string;
+  propertyType: "TEXT" | "BOOLEAN";
+}) {
+  const component = await figma.getNodeByIdAsync(params.componentId);
+  if (!component || (component.type !== "COMPONENT" && component.type !== "COMPONENT_SET")) {
+    throw new Error("Node is not a component or component set");
+  }
+
+  const layer = await figma.getNodeByIdAsync(params.layerId);
+  if (!layer) {
+    throw new Error("Layer not found");
+  }
+
+  const comp = component as ComponentNode | ComponentSetNode;
+
+  if (params.propertyType === "TEXT") {
+    if (layer.type !== "TEXT") {
+      throw new Error("Layer is not a text node");
+    }
+    // Add text property with current text as default
+    const textNode = layer as TextNode;
+    const propertyId = comp.addComponentProperty(
+      params.propertyName,
+      "TEXT",
+      textNode.characters
+    );
+    // Link the text layer to this property
+    textNode.componentPropertyReferences = {
+      ...textNode.componentPropertyReferences,
+      characters: propertyId,
+    };
+
+    return {
+      success: true,
+      componentId: comp.id,
+      layerId: layer.id,
+      propertyName: params.propertyName,
+      propertyType: "TEXT",
+      propertyId,
+      defaultValue: textNode.characters,
+    };
+  } else if (params.propertyType === "BOOLEAN") {
+    // Add boolean property for visibility
+    const propertyId = comp.addComponentProperty(
+      params.propertyName,
+      "BOOLEAN",
+      layer.visible
+    );
+    // Link layer visibility to this property
+    (layer as SceneNode).componentPropertyReferences = {
+      ...(layer as SceneNode).componentPropertyReferences,
+      visible: propertyId,
+    };
+
+    return {
+      success: true,
+      componentId: comp.id,
+      layerId: layer.id,
+      propertyName: params.propertyName,
+      propertyType: "BOOLEAN",
+      propertyId,
+      defaultValue: layer.visible,
+    };
+  }
+
+  throw new Error("Unsupported property type");
+}
+
+// List all properties on a component
+async function listComponentProperties(params: { componentId: string }) {
+  const node = await figma.getNodeByIdAsync(params.componentId);
+  if (!node || (node.type !== "COMPONENT" && node.type !== "COMPONENT_SET")) {
+    throw new Error("Node is not a component or component set");
+  }
+
+  const component = node as ComponentNode | ComponentSetNode;
+  const properties = component.componentPropertyDefinitions;
+
+  const propertyList = Object.entries(properties).map(([key, def]) => ({
+    id: key,
+    name: def.type === "VARIANT" ? key : key.split("#")[0],
+    type: def.type,
+    defaultValue: def.defaultValue,
+    variantOptions: def.type === "VARIANT" ? def.variantOptions : undefined,
+  }));
+
+  return {
+    success: true,
+    componentId: component.id,
+    componentName: component.name,
+    properties: propertyList,
+    count: propertyList.length,
+  };
+}
+
+async function combineAsVariants(params: {
+  componentIds: string[];
+  name?: string;
+}) {
+  const components: ComponentNode[] = [];
+
+  for (const id of params.componentIds) {
+    const node = await figma.getNodeByIdAsync(id);
+    if (node && node.type === "COMPONENT") {
+      components.push(node as ComponentNode);
+    }
+  }
+
+  if (components.length < 2) {
+    throw new Error("Need at least 2 components to combine as variants");
+  }
+
+  const componentSet = figma.combineAsVariants(components, figma.currentPage);
+  if (params.name) {
+    componentSet.name = params.name;
+  }
+
+  // Auto-expose text properties on the component set
+  const exposedProperties: Array<{ name: string; propertyId: string; defaultValue: string }> = [];
+  const firstVariant = components[0];
+  const textNodesInFirst = firstVariant.findAll(n => n.type === "TEXT") as TextNode[];
+
+  for (const textNode of textNodesInFirst) {
+    const propName = textNode.name || textNode.characters.slice(0, 20) || "Text";
+    const uniquePropName = exposedProperties.find(p => p.name === propName)
+      ? `${propName} ${exposedProperties.length + 1}`
+      : propName;
+
+    try {
+      const propertyId = componentSet.addComponentProperty(
+        uniquePropName,
+        "TEXT",
+        textNode.characters
+      );
+
+      // Link text nodes in ALL variants to this property
+      for (const comp of components) {
+        const matchingTextNodes = comp.findAll(n => n.type === "TEXT" && n.name === textNode.name) as TextNode[];
+        for (const tn of matchingTextNodes) {
+          tn.componentPropertyReferences = {
+            ...tn.componentPropertyReferences,
+            characters: propertyId,
+          };
+        }
+      }
+
+      exposedProperties.push({
+        name: uniquePropName,
+        propertyId,
+        defaultValue: textNode.characters,
+      });
+    } catch (e) {
+      // Skip if property can't be added
+    }
+  }
+
+  return {
+    success: true,
+    componentSetId: componentSet.id,
+    name: componentSet.name,
+    variantCount: components.length,
+    exposedProperties,
+  };
+}
+
+// ============================================
+// MESSAGE HANDLER - Main entry point
+// ============================================
+
+figma.ui.onmessage = async (msg: { id: string; command: string; params: any }) => {
+  const { id, command, params } = msg;
+
+  try {
+    const handler = commandHandlers.get(command);
+
+    if (!handler) {
+      throw new Error(`Unknown command: ${command}`);
+    }
+
+    const result = await handler(params);
+    figma.ui.postMessage({ id, result });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    figma.ui.postMessage({ id, error: errorMessage });
+  }
+};
