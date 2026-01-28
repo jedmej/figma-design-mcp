@@ -8,7 +8,7 @@ import { WebSocketServer, WebSocket } from "ws";
 
 // WebSocket server for Figma plugin communication
 const WS_PORT = 9001;
-const REQUEST_TIMEOUT = 10000; // 10 seconds (reduced from 30s)
+const REQUEST_TIMEOUT = 60000; // 60 seconds (increased for large files)
 const HEARTBEAT_INTERVAL = 15000; // 15 seconds
 
 let figmaSocket: WebSocket | null = null;
@@ -90,9 +90,97 @@ async function sendToFigma(command: string, params: any): Promise<any> {
   });
 }
 
+// ============================================
+// DESIGN PRINCIPLES - Embedded aesthetic guidelines
+// ============================================
+
+const DESIGN_PRINCIPLES = `
+## FIGMA DESIGN PRINCIPLES — BOLD AESTHETIC FRAMEWORK
+
+Before creating any design, commit to a BOLD aesthetic direction:
+
+### 1. CONTEXT & DIRECTION
+- **Purpose**: What problem does this interface solve? Who uses it?
+- **Tone**: Pick a distinct aesthetic: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc.
+- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+
+### 2. TYPOGRAPHY
+- Choose fonts that are beautiful, unique, and interesting
+- AVOID generic fonts: Arial, Inter, Roboto, system defaults
+- Pair a distinctive display font with a refined body font
+- Intentional hierarchy with varied weights, sizes, and tracking
+
+### 3. COLOR & THEME
+- Commit to a cohesive aesthetic — no timid, evenly-distributed palettes
+- Dominant colors with sharp accents outperform safe choices
+- Consider: dark/moody, light/airy, monochromatic, complementary clash, earthy/organic
+- Proper contrast ratios for accessibility
+
+### 4. SPATIAL COMPOSITION
+- Unexpected layouts — asymmetry, overlap, diagonal flow
+- Grid-breaking elements where they add visual interest
+- Generous negative space OR controlled density (commit to one)
+- 8px grid system for consistency
+
+### 5. VISUAL DETAILS & ATMOSPHERE
+- Subtle shadows with realistic depth (use shadow presets thoughtfully)
+- Refined border radii — not everything needs 8px corners
+- Consider: gradient meshes, noise textures, geometric patterns, layered transparencies
+- Decorative borders, custom shapes, grain overlays
+
+### 6. WHAT TO AVOID (Generic AI Aesthetics)
+- Overused fonts (Inter, Roboto, Arial)
+- Cliché color schemes (purple gradients on white)
+- Predictable layouts and component patterns
+- Cookie-cutter designs lacking context-specific character
+- Safe, boring defaults
+
+### 7. EXECUTION PRINCIPLE
+Match complexity to vision:
+- **Maximalist**: Elaborate details, bold colors, layered elements, dramatic effects
+- **Minimalist**: Restraint, precision, perfect spacing, typography-focused, subtle details
+
+**CRITICAL**: Choose a clear conceptual direction and execute with precision. Bold maximalism and refined minimalism both work — the key is INTENTIONALITY, not intensity.
+
+Every design should feel genuinely crafted for its specific context. No two designs should look the same.
+
+## PERFORMANCE RULES — EFFICIENCY GUIDELINES
+
+When modifying multiple nodes, ALWAYS optimize for fewer API calls:
+
+### 1. USE bulk_modify FOR MULTIPLE NODES
+When applying the same or similar changes to multiple nodes, use \`bulk_modify\` with an array of nodeIds instead of making individual calls:
+- BAD: 4 separate set_fill_color calls
+- GOOD: 1 bulk_modify call with all nodeIds
+
+### 2. USE PARALLEL TOOL CALLS
+When making independent changes to different nodes, call tools in parallel (same message) rather than sequentially:
+- BAD: Sequential calls waiting for each to complete
+- GOOD: All independent calls in a single response
+
+### 3. USE batch FOR CREATION WORKFLOWS
+When creating multiple related elements, use the \`batch\` command to execute them in one operation.
+
+### 4. MINIMIZE ROUND-TRIPS
+Each tool call is a round-trip to Figma. Fewer calls = faster response for the user.
+
+### 5. ALWAYS RESPECT SELECTION SCOPE
+CRITICAL: Only modify nodes within the user's current selection unless explicitly asked otherwise.
+- ALWAYS use \`scopeToSelection: true\` (or omit it, as true is the default) when searching for nodes
+- NEVER set \`scopeToSelection: false\` unless the user explicitly asks to search the entire page
+- Before modifying nodes, verify they are within the selected frame/context
+- If user says "change X" they mean X within their selection, not X across the entire file
+
+### 6. VERIFY BEFORE BULK CHANGES
+Before making changes to multiple nodes:
+- Confirm the search results are scoped correctly
+- Don't blindly change all matching nodes across the entire file
+- When in doubt, ask the user to confirm the scope
+`;
+
 // MCP Server setup
 const server = new Server(
-  { name: "figma-design-server", version: "2.0.0" },
+  { name: "figma-design-server", version: "2.1.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -101,12 +189,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       // ============================================
+      // DESIGN GUIDELINES - Must-read before designing
+      // ============================================
+      {
+        name: "get_design_guidelines",
+        description:
+          "IMPORTANT: Call this FIRST before starting any design work. Returns the embedded design principles and aesthetic guidelines that should inform all design decisions. These principles emphasize bold, distinctive, production-quality designs that avoid generic AI aesthetics.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
+      // ============================================
       // BATCH OPERATIONS - Execute multiple commands in one call
       // ============================================
       {
         name: "batch",
         description:
-          "Execute multiple Figma commands in a single operation for better performance. Use $ref:id.field to reference results from earlier commands in the batch.",
+          "Execute multiple Figma commands in a single operation for better performance. Use $ref:id.field to reference results from earlier commands in the batch. IMPORTANT: Before designing, call get_design_guidelines to understand the aesthetic principles.",
         inputSchema: {
           type: "object",
           properties: {
@@ -142,7 +242,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "create_button",
         description:
-          "Create a complete, styled button with text, auto-layout, and proper styling in a single call",
+          "Create a complete, styled button with text, auto-layout, and proper styling. Follow design guidelines: choose distinctive colors, consider the aesthetic direction (not just default primary blue), and ensure the button fits the overall design language.",
         inputSchema: {
           type: "object",
           properties: {
@@ -201,7 +301,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "create_card",
         description:
-          "Create a card component with optional header, body, and footer sections in a single call",
+          "Create a card component with optional header, body, and footer sections. Follow design guidelines: consider shadow depth, corner radius that fits the aesthetic, distinctive typography, and colors that create atmosphere rather than defaulting to white.",
         inputSchema: {
           type: "object",
           properties: {
@@ -320,7 +420,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "create_frame",
         description:
-          "Create a new frame on the Figma canvas. Frames are containers for other elements.",
+          "Create a new frame on the Figma canvas. Frames are containers for other elements. When starting a design, consider the aesthetic direction first — choose background colors, dimensions, and structure that support a bold, distinctive vision rather than generic defaults.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1244,7 +1344,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "find_nodes",
         description:
-          "Search for nodes by type, name, or name pattern. Returns matching nodes with their IDs, positions, and sizes. Use this to find specific elements without manual tree traversal.",
+          "Search for nodes by type, name, or name pattern. Returns matching nodes with their IDs, positions, and sizes. By default, searches within the current selection for better performance on large files. Set scopeToSelection: false to search entire page.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1262,11 +1362,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             parentId: {
               type: "string",
-              description: "Search within a specific parent node (default: current page)",
+              description: "Search within a specific parent node (overrides scopeToSelection)",
             },
             maxResults: {
               type: "number",
               description: "Maximum number of results to return (default: 100)",
+            },
+            scopeToSelection: {
+              type: "boolean",
+              description: "Search within selection only for performance (default: true). Set to false to search entire page.",
             },
           },
         },
@@ -1292,7 +1396,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: "bulk_modify",
         description:
-          "Apply the same changes to multiple nodes at once. Much more efficient than individual set_fill_color calls.",
+          "Apply the same changes to multiple nodes at once. Supports text styling, layout, auto-layout padding, transforms, and effects. Much more efficient than individual calls.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1305,6 +1409,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "object",
               description: "Changes to apply to all nodes",
               properties: {
+                // Original properties
                 fillColor: {
                   type: "object",
                   description: "Fill color (RGB 0-1)",
@@ -1327,6 +1432,78 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 opacity: { type: "number" },
                 cornerRadius: { type: "number" },
                 visible: { type: "boolean" },
+                fontSize: { type: "number", description: "Font size for text nodes" },
+                // Text properties
+                fontFamily: { type: "string", description: "Font family (e.g., 'Inter', 'Roboto')" },
+                fontWeight: { type: "string", description: "Font weight/style (e.g., 'Regular', 'Bold')" },
+                textAlign: {
+                  type: "string",
+                  enum: ["LEFT", "CENTER", "RIGHT", "JUSTIFIED"],
+                  description: "Text alignment",
+                },
+                letterSpacing: { type: "number", description: "Letter spacing in pixels" },
+                lineHeight: { type: "number", description: "Line height in pixels (< 10 treated as percentage)" },
+                textDecoration: {
+                  type: "string",
+                  enum: ["NONE", "UNDERLINE", "STRIKETHROUGH"],
+                  description: "Text decoration",
+                },
+                textCase: {
+                  type: "string",
+                  enum: ["ORIGINAL", "UPPER", "LOWER", "TITLE"],
+                  description: "Text case transformation",
+                },
+                // Layout properties
+                width: {
+                  oneOf: [
+                    { type: "number" },
+                    { type: "string", enum: ["hug", "fill"] },
+                  ],
+                  description: "Width in pixels, or 'hug'/'fill' for auto-layout sizing",
+                },
+                height: {
+                  oneOf: [
+                    { type: "number" },
+                    { type: "string", enum: ["hug", "fill"] },
+                  ],
+                  description: "Height in pixels, or 'hug'/'fill' for auto-layout sizing",
+                },
+                x: { type: "number", description: "X position" },
+                y: { type: "number", description: "Y position" },
+                rotation: { type: "number", description: "Rotation in degrees" },
+                // Auto-layout properties
+                paddingTop: { type: "number", description: "Top padding (for frames with auto-layout)" },
+                paddingRight: { type: "number", description: "Right padding" },
+                paddingBottom: { type: "number", description: "Bottom padding" },
+                paddingLeft: { type: "number", description: "Left padding" },
+                itemSpacing: { type: "number", description: "Spacing between items in auto-layout" },
+                // Transform properties
+                flipHorizontal: { type: "boolean", description: "Flip horizontally" },
+                flipVertical: { type: "boolean", description: "Flip vertically" },
+                // Effects
+                clearEffects: { type: "boolean", description: "Clear all effects from nodes" },
+                addDropShadow: {
+                  oneOf: [
+                    { type: "string", enum: ["small", "medium", "large", "xl"] },
+                    {
+                      type: "object",
+                      properties: {
+                        color: {
+                          type: "object",
+                          properties: { r: { type: "number" }, g: { type: "number" }, b: { type: "number" }, a: { type: "number" } },
+                        },
+                        offset: {
+                          type: "object",
+                          properties: { x: { type: "number" }, y: { type: "number" } },
+                        },
+                        blur: { type: "number" },
+                        spread: { type: "number" },
+                      },
+                    },
+                  ],
+                  description: "Add drop shadow: preset name or custom config",
+                },
+                addBlur: { type: "number", description: "Add layer blur with specified radius" },
               },
             },
           },
@@ -1398,6 +1575,214 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["nodeId"],
         },
       },
+      // ============================================
+      // NEW TOOLS - Range-based text, effects, search, undo
+      // ============================================
+      {
+        name: "set_text_range",
+        description:
+          "Apply styling to a specific range of characters within a text node. Useful for creating rich text with different formatting.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeId: {
+              type: "string",
+              description: "ID of the text node",
+            },
+            start: {
+              type: "number",
+              description: "Start index of the character range (0-based)",
+            },
+            end: {
+              type: "number",
+              description: "End index of the character range (exclusive)",
+            },
+            properties: {
+              type: "object",
+              description: "Styling properties to apply to the range",
+              properties: {
+                fontSize: { type: "number", description: "Font size in pixels" },
+                fontFamily: { type: "string", description: "Font family name" },
+                fontWeight: { type: "string", description: "Font weight/style" },
+                fillColor: {
+                  type: "object",
+                  description: "Text color (RGB 0-1)",
+                  properties: {
+                    r: { type: "number" },
+                    g: { type: "number" },
+                    b: { type: "number" },
+                  },
+                },
+                textDecoration: {
+                  type: "string",
+                  enum: ["NONE", "UNDERLINE", "STRIKETHROUGH"],
+                  description: "Text decoration",
+                },
+                letterSpacing: { type: "number", description: "Letter spacing in pixels" },
+              },
+            },
+          },
+          required: ["nodeId", "start", "end", "properties"],
+        },
+      },
+      {
+        name: "add_shadow_preset",
+        description:
+          "Add a preset drop shadow to a node. Presets: small (subtle), medium (standard), large (prominent), xl (dramatic).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeId: {
+              type: "string",
+              description: "ID of the node",
+            },
+            preset: {
+              type: "string",
+              enum: ["small", "medium", "large", "xl"],
+              description: "Shadow preset size",
+            },
+          },
+          required: ["nodeId", "preset"],
+        },
+      },
+      {
+        name: "clear_effects",
+        description:
+          "Remove effects from a node. Can clear all effects or only a specific type.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            nodeId: {
+              type: "string",
+              description: "ID of the node",
+            },
+            type: {
+              type: "string",
+              enum: ["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR"],
+              description: "Optional: specific effect type to clear. If not specified, clears all effects.",
+            },
+          },
+          required: ["nodeId"],
+        },
+      },
+      {
+        name: "find_by_color",
+        description:
+          "Search for nodes by their fill or stroke color. By default, searches within the current selection for better performance. Set scopeToSelection: false to search entire page.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            color: {
+              type: "object",
+              description: "Target color to search for (RGB 0-1)",
+              properties: {
+                r: { type: "number" },
+                g: { type: "number" },
+                b: { type: "number" },
+              },
+              required: ["r", "g", "b"],
+            },
+            tolerance: {
+              type: "number",
+              description: "Color matching tolerance (0-1, default: 0.1)",
+            },
+            searchFills: {
+              type: "boolean",
+              description: "Search in fill colors (default: true)",
+            },
+            searchStrokes: {
+              type: "boolean",
+              description: "Search in stroke colors (default: false)",
+            },
+            parentId: {
+              type: "string",
+              description: "Search within specific parent node (overrides scopeToSelection)",
+            },
+            maxResults: {
+              type: "number",
+              description: "Maximum results to return (default: 100)",
+            },
+            scopeToSelection: {
+              type: "boolean",
+              description: "Search within selection only for performance (default: true). Set to false to search entire page.",
+            },
+          },
+          required: ["color"],
+        },
+      },
+      {
+        name: "find_by_font",
+        description:
+          "Search for text nodes by font properties. By default, searches within the current selection for better performance. Set scopeToSelection: false to search entire page.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fontFamily: {
+              type: "string",
+              description: "Font family to search for (e.g., 'Inter', 'Roboto')",
+            },
+            fontWeight: {
+              type: "string",
+              description: "Font weight/style to search for (e.g., 'Bold', 'Regular')",
+            },
+            fontSize: {
+              type: "number",
+              description: "Font size to search for",
+            },
+            parentId: {
+              type: "string",
+              description: "Search within specific parent node (overrides scopeToSelection)",
+            },
+            maxResults: {
+              type: "number",
+              description: "Maximum results to return (default: 100)",
+            },
+            scopeToSelection: {
+              type: "boolean",
+              description: "Search within selection only for performance (default: true). Set to false to search entire page.",
+            },
+          },
+        },
+      },
+      {
+        name: "find_instances",
+        description:
+          "Find all instances of a specific component. By default, searches within the current selection for better performance. Set scopeToSelection: false to search entire page.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            componentId: {
+              type: "string",
+              description: "ID of the component to find instances of",
+            },
+            componentName: {
+              type: "string",
+              description: "Name of the component (alternative to componentId)",
+            },
+            parentId: {
+              type: "string",
+              description: "Search within specific parent node (overrides scopeToSelection)",
+            },
+            maxResults: {
+              type: "number",
+              description: "Maximum results to return (default: 100)",
+            },
+            scopeToSelection: {
+              type: "boolean",
+              description: "Search within selection only for performance (default: true). Set to false to search entire page.",
+            },
+          },
+        },
+      },
+      {
+        name: "undo_last_operation",
+        description:
+          "Undo the last bulk_modify operation. Restores all changed properties to their previous values. Single-level undo only.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
     ],
   };
 });
@@ -1405,6 +1790,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+
+  // Handle design guidelines request locally (doesn't need Figma)
+  if (name === "get_design_guidelines") {
+    return {
+      content: [
+        {
+          type: "text",
+          text: DESIGN_PRINCIPLES,
+        },
+      ],
+    };
+  }
 
   try {
     const result = await sendToFigma(name, args || {});

@@ -65,28 +65,34 @@
       }
     }
   }))();
-  function findNode(nodeId) {
-    return figma.currentPage.findOne((n) => n.id === nodeId);
-  }
-  function getParent(parentId) {
-    if (parentId) {
-      const parent = findNode(parentId);
-      if (parent && "appendChild" in parent) {
-        return parent;
-      }
-    }
-    return figma.currentPage;
-  }
-  function findNodes(nodeIds) {
-    const nodeMap = /* @__PURE__ */ new Map();
-    const idSet = new Set(nodeIds);
-    figma.currentPage.findAll((node) => {
-      if (idSet.has(node.id)) {
-        nodeMap.set(node.id, node);
-      }
-      return false;
+  function findNodeAsync(nodeId) {
+    return __async(this, null, function* () {
+      const node = yield figma.getNodeByIdAsync(nodeId);
+      return node;
     });
-    return nodeMap;
+  }
+  function getParentAsync(parentId) {
+    return __async(this, null, function* () {
+      if (parentId) {
+        const parent = yield findNodeAsync(parentId);
+        if (parent && "appendChild" in parent) {
+          return parent;
+        }
+      }
+      return figma.currentPage;
+    });
+  }
+  function findNodesAsync(nodeIds) {
+    return __async(this, null, function* () {
+      const nodeMap = /* @__PURE__ */ new Map();
+      const nodes = yield Promise.all(
+        nodeIds.map((id) => figma.getNodeByIdAsync(id))
+      );
+      nodes.forEach((node, i) => {
+        if (node) nodeMap.set(nodeIds[i], node);
+      });
+      return nodeMap;
+    });
   }
   function createFrame(params) {
     return __async(this, null, function* () {
@@ -99,7 +105,7 @@
       if (params.fillColor) {
         frame.fills = [{ type: "SOLID", color: params.fillColor }];
       }
-      const parent = getParent(params.parentId);
+      const parent = yield getParentAsync(params.parentId);
       parent.appendChild(frame);
       return {
         success: true,
@@ -127,7 +133,7 @@
       if (params.fillColor) {
         textNode.fills = [{ type: "SOLID", color: params.fillColor }];
       }
-      const parent = getParent(params.parentId);
+      const parent = yield getParentAsync(params.parentId);
       parent.appendChild(textNode);
       return {
         success: true,
@@ -152,7 +158,7 @@
       if (params.fillColor) {
         rect.fills = [{ type: "SOLID", color: params.fillColor }];
       }
-      const parent = getParent(params.parentId);
+      const parent = yield getParentAsync(params.parentId);
       parent.appendChild(rect);
       return {
         success: true,
@@ -176,7 +182,7 @@
       if (params.fillColor) {
         ellipse.fills = [{ type: "SOLID", color: params.fillColor }];
       }
-      const parent = getParent(params.parentId);
+      const parent = yield getParentAsync(params.parentId);
       parent.appendChild(ellipse);
       return {
         success: true,
@@ -191,7 +197,7 @@
   function setAutoLayout(params) {
     return __async(this, null, function* () {
       var _a, _b, _c, _d, _e, _f;
-      const node = findNode(params.nodeId);
+      const node = yield findNodeAsync(params.nodeId);
       if (!node || node.type !== "FRAME") {
         throw new Error("Node not found or not a frame");
       }
@@ -221,7 +227,7 @@
       var _a, _b;
       let component;
       if (params.fromNodeId) {
-        const node = findNode(params.fromNodeId);
+        const node = yield findNodeAsync(params.fromNodeId);
         if (!node) {
           throw new Error("Node not found");
         }
@@ -266,7 +272,7 @@
   function createInstance(params) {
     return __async(this, null, function* () {
       var _a, _b;
-      const component = findNode(params.componentId);
+      const component = yield findNodeAsync(params.componentId);
       if (!component || component.type !== "COMPONENT") {
         throw new Error("Component not found");
       }
@@ -274,7 +280,7 @@
       instance.x = (_a = params.x) != null ? _a : 0;
       instance.y = (_b = params.y) != null ? _b : 0;
       if (params.parentId) {
-        const parent = getParent(params.parentId);
+        const parent = yield getParentAsync(params.parentId);
         parent.appendChild(instance);
       }
       return {
@@ -287,71 +293,79 @@
     });
   }
   function listNodes(params) {
-    let nodes;
-    if (params.parentId) {
-      const parent = findNode(params.parentId);
-      if (parent && "children" in parent) {
-        nodes = parent.children;
+    return __async(this, null, function* () {
+      let nodes;
+      if (params.parentId) {
+        const parent = yield findNodeAsync(params.parentId);
+        if (parent && "children" in parent) {
+          nodes = parent.children;
+        } else {
+          throw new Error("Parent not found or has no children");
+        }
       } else {
-        throw new Error("Parent not found or has no children");
+        nodes = figma.currentPage.children;
       }
-    } else {
-      nodes = figma.currentPage.children;
-    }
-    const nodeList = nodes.map((node) => ({
-      id: node.id,
-      name: node.name,
-      type: node.type,
-      position: { x: node.x, y: node.y },
-      size: { width: node.width, height: node.height }
-    }));
-    return {
-      success: true,
-      nodes: nodeList,
-      count: nodeList.length
-    };
+      const nodeList = nodes.map((node) => ({
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        position: { x: node.x, y: node.y },
+        size: { width: node.width, height: node.height }
+      }));
+      return {
+        success: true,
+        nodes: nodeList,
+        count: nodeList.length
+      };
+    });
   }
   function deleteNode(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    const name = node.name;
-    node.remove();
-    return {
-      success: true,
-      deletedNodeId: params.nodeId,
-      deletedName: name
-    };
+    return __async(this, null, function* () {
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      const name = node.name;
+      node.remove();
+      return {
+        success: true,
+        deletedNodeId: params.nodeId,
+        deletedName: name
+      };
+    });
   }
   function moveNode(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    node.x = params.x;
-    node.y = params.y;
-    return {
-      success: true,
-      nodeId: node.id,
-      newPosition: { x: node.x, y: node.y }
-    };
+    return __async(this, null, function* () {
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      node.x = params.x;
+      node.y = params.y;
+      return {
+        success: true,
+        nodeId: node.id,
+        newPosition: { x: node.x, y: node.y }
+      };
+    });
   }
   function resizeNode(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    if ("resize" in node) {
-      node.resize(params.width, params.height);
-    } else {
-      throw new Error("Node cannot be resized");
-    }
-    return {
-      success: true,
-      nodeId: node.id,
-      newSize: { width: node.width, height: node.height }
-    };
+    return __async(this, null, function* () {
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if ("resize" in node) {
+        node.resize(params.width, params.height);
+      } else {
+        throw new Error("Node cannot be resized");
+      }
+      return {
+        success: true,
+        nodeId: node.id,
+        newSize: { width: node.width, height: node.height }
+      };
+    });
   }
   function setFillColor(params) {
     return __async(this, null, function* () {
@@ -375,23 +389,25 @@
     });
   }
   function addStroke(params) {
-    var _a, _b;
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    if ("strokes" in node) {
-      node.strokes = [{ type: "SOLID", color: params.color }];
-      node.strokeWeight = (_a = params.weight) != null ? _a : 1;
-    } else {
-      throw new Error("Node does not support strokes");
-    }
-    return {
-      success: true,
-      nodeId: node.id,
-      strokeColor: params.color,
-      strokeWeight: (_b = params.weight) != null ? _b : 1
-    };
+    return __async(this, null, function* () {
+      var _a, _b;
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if ("strokes" in node) {
+        node.strokes = [{ type: "SOLID", color: params.color }];
+        node.strokeWeight = (_a = params.weight) != null ? _a : 1;
+      } else {
+        throw new Error("Node does not support strokes");
+      }
+      return {
+        success: true,
+        nodeId: node.id,
+        strokeColor: params.color,
+        strokeWeight: (_b = params.weight) != null ? _b : 1
+      };
+    });
   }
   function getSelection() {
     const selection = figma.currentPage.selection;
@@ -406,93 +422,103 @@
     };
   }
   function setSelection(params) {
-    const nodeMap = findNodes(params.nodeIds);
-    const nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
-    figma.currentPage.selection = nodes;
-    return {
-      success: true,
-      selectedCount: nodes.length
-    };
+    return __async(this, null, function* () {
+      const nodeMap = yield findNodesAsync(params.nodeIds);
+      const nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
+      figma.currentPage.selection = nodes;
+      return {
+        success: true,
+        selectedCount: nodes.length
+      };
+    });
   }
   function zoomToFit(params) {
-    let nodes;
-    if (params.nodeIds && params.nodeIds.length > 0) {
-      const nodeMap = findNodes(params.nodeIds);
-      nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
-    } else {
-      nodes = figma.currentPage.selection;
-    }
-    if (nodes.length > 0) {
-      figma.viewport.scrollAndZoomIntoView(nodes);
-    }
-    return {
-      success: true,
-      zoomedToNodes: nodes.length
-    };
+    return __async(this, null, function* () {
+      let nodes;
+      if (params.nodeIds && params.nodeIds.length > 0) {
+        const nodeMap = yield findNodesAsync(params.nodeIds);
+        nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
+      } else {
+        nodes = figma.currentPage.selection;
+      }
+      if (nodes.length > 0) {
+        figma.viewport.scrollAndZoomIntoView(nodes);
+      }
+      return {
+        success: true,
+        zoomedToNodes: nodes.length
+      };
+    });
   }
   function setCornerRadius(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    if ("cornerRadius" in node) {
-      node.cornerRadius = params.radius;
-    } else {
-      throw new Error("Node does not support corner radius");
-    }
-    return {
-      success: true,
-      nodeId: node.id,
-      cornerRadius: params.radius
-    };
+    return __async(this, null, function* () {
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if ("cornerRadius" in node) {
+        node.cornerRadius = params.radius;
+      } else {
+        throw new Error("Node does not support corner radius");
+      }
+      return {
+        success: true,
+        nodeId: node.id,
+        cornerRadius: params.radius
+      };
+    });
   }
   function reparentNode(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    const newParent = findNode(params.newParentId);
-    if (!newParent || !("appendChild" in newParent)) {
-      throw new Error("New parent not found or cannot contain children");
-    }
-    const parent = newParent;
-    if (params.index !== void 0) {
-      parent.insertChild(params.index, node);
-    } else {
-      parent.appendChild(node);
-    }
-    return {
-      success: true,
-      nodeId: node.id,
-      newParentId: parent.id,
-      newParentName: parent.name
-    };
+    return __async(this, null, function* () {
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      const newParent = yield findNodeAsync(params.newParentId);
+      if (!newParent || !("appendChild" in newParent)) {
+        throw new Error("New parent not found or cannot contain children");
+      }
+      const parent = newParent;
+      if (params.index !== void 0) {
+        parent.insertChild(params.index, node);
+      } else {
+        parent.appendChild(node);
+      }
+      return {
+        success: true,
+        nodeId: node.id,
+        newParentId: parent.id,
+        newParentName: parent.name
+      };
+    });
   }
   function setSizingMode(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    if (!("layoutSizingHorizontal" in node)) {
-      throw new Error("Node does not support sizing modes");
-    }
-    const frameNode = node;
-    if (params.horizontal) {
-      frameNode.layoutSizingHorizontal = params.horizontal;
-    }
-    if (params.vertical) {
-      frameNode.layoutSizingVertical = params.vertical;
-    }
-    return {
-      success: true,
-      nodeId: node.id,
-      horizontalSizing: frameNode.layoutSizingHorizontal,
-      verticalSizing: frameNode.layoutSizingVertical
-    };
+    return __async(this, null, function* () {
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if (!("layoutSizingHorizontal" in node)) {
+        throw new Error("Node does not support sizing modes");
+      }
+      const frameNode = node;
+      if (params.horizontal) {
+        frameNode.layoutSizingHorizontal = params.horizontal;
+      }
+      if (params.vertical) {
+        frameNode.layoutSizingVertical = params.vertical;
+      }
+      return {
+        success: true,
+        nodeId: node.id,
+        horizontalSizing: frameNode.layoutSizingHorizontal,
+        verticalSizing: frameNode.layoutSizingVertical
+      };
+    });
   }
   function setText(params) {
     return __async(this, null, function* () {
-      const node = findNode(params.nodeId);
+      const node = yield findNodeAsync(params.nodeId);
       if (!node) {
         throw new Error("Node not found");
       }
@@ -510,200 +536,214 @@
     });
   }
   function setConstraints(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    if (params.horizontal) {
-      node.constraints = __spreadProps(__spreadValues({}, node.constraints), { horizontal: params.horizontal });
-    }
-    if (params.vertical) {
-      node.constraints = __spreadProps(__spreadValues({}, node.constraints), { vertical: params.vertical });
-    }
-    return {
-      success: true,
-      nodeId: node.id,
-      constraints: node.constraints
-    };
+    return __async(this, null, function* () {
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if (params.horizontal) {
+        node.constraints = __spreadProps(__spreadValues({}, node.constraints), { horizontal: params.horizontal });
+      }
+      if (params.vertical) {
+        node.constraints = __spreadProps(__spreadValues({}, node.constraints), { vertical: params.vertical });
+      }
+      return {
+        success: true,
+        nodeId: node.id,
+        constraints: node.constraints
+      };
+    });
   }
   function duplicateNode(params) {
-    var _a, _b;
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    const clone = node.clone();
-    clone.x = node.x + ((_a = params.offsetX) != null ? _a : 20);
-    clone.y = node.y + ((_b = params.offsetY) != null ? _b : 20);
-    return {
-      success: true,
-      originalId: node.id,
-      newNodeId: clone.id,
-      name: clone.name,
-      position: { x: clone.x, y: clone.y }
-    };
+    return __async(this, null, function* () {
+      var _a, _b;
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      const clone = node.clone();
+      clone.x = node.x + ((_a = params.offsetX) != null ? _a : 20);
+      clone.y = node.y + ((_b = params.offsetY) != null ? _b : 20);
+      return {
+        success: true,
+        originalId: node.id,
+        newNodeId: clone.id,
+        name: clone.name,
+        position: { x: clone.x, y: clone.y }
+      };
+    });
   }
   function groupNodes(params) {
-    var _a;
-    const nodeMap = findNodes(params.nodeIds);
-    const nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
-    if (nodes.length < 2) {
-      throw new Error("Need at least 2 nodes to group");
-    }
-    const group = figma.group(nodes, figma.currentPage);
-    group.name = (_a = params.name) != null ? _a : "Group";
-    return {
-      success: true,
-      groupId: group.id,
-      name: group.name,
-      childCount: nodes.length
-    };
+    return __async(this, null, function* () {
+      var _a;
+      const nodeMap = yield findNodesAsync(params.nodeIds);
+      const nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
+      if (nodes.length < 2) {
+        throw new Error("Need at least 2 nodes to group");
+      }
+      const group = figma.group(nodes, figma.currentPage);
+      group.name = (_a = params.name) != null ? _a : "Group";
+      return {
+        success: true,
+        groupId: group.id,
+        name: group.name,
+        childCount: nodes.length
+      };
+    });
   }
   function alignNodes(params) {
-    const nodeMap = findNodes(params.nodeIds);
-    const nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
-    if (nodes.length < 2) {
-      throw new Error("Need at least 2 nodes to align");
-    }
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const node of nodes) {
-      minX = Math.min(minX, node.x);
-      maxX = Math.max(maxX, node.x + node.width);
-      minY = Math.min(minY, node.y);
-      maxY = Math.max(maxY, node.y + node.height);
-    }
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-    for (const node of nodes) {
-      switch (params.alignment) {
-        case "LEFT":
-          node.x = minX;
-          break;
-        case "CENTER_H":
-          node.x = centerX - node.width / 2;
-          break;
-        case "RIGHT":
-          node.x = maxX - node.width;
-          break;
-        case "TOP":
-          node.y = minY;
-          break;
-        case "CENTER_V":
-          node.y = centerY - node.height / 2;
-          break;
-        case "BOTTOM":
-          node.y = maxY - node.height;
-          break;
+    return __async(this, null, function* () {
+      const nodeMap = yield findNodesAsync(params.nodeIds);
+      const nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
+      if (nodes.length < 2) {
+        throw new Error("Need at least 2 nodes to align");
       }
-    }
-    return {
-      success: true,
-      alignedCount: nodes.length,
-      alignment: params.alignment
-    };
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const node of nodes) {
+        minX = Math.min(minX, node.x);
+        maxX = Math.max(maxX, node.x + node.width);
+        minY = Math.min(minY, node.y);
+        maxY = Math.max(maxY, node.y + node.height);
+      }
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      for (const node of nodes) {
+        switch (params.alignment) {
+          case "LEFT":
+            node.x = minX;
+            break;
+          case "CENTER_H":
+            node.x = centerX - node.width / 2;
+            break;
+          case "RIGHT":
+            node.x = maxX - node.width;
+            break;
+          case "TOP":
+            node.y = minY;
+            break;
+          case "CENTER_V":
+            node.y = centerY - node.height / 2;
+            break;
+          case "BOTTOM":
+            node.y = maxY - node.height;
+            break;
+        }
+      }
+      return {
+        success: true,
+        alignedCount: nodes.length,
+        alignment: params.alignment
+      };
+    });
   }
   function distributeNodes(params) {
-    const nodeMap = findNodes(params.nodeIds);
-    const nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
-    if (nodes.length < 2) {
-      throw new Error("Need at least 2 nodes to distribute");
-    }
-    if (params.direction === "HORIZONTAL") {
-      nodes.sort((a, b) => a.x - b.x);
-    } else {
-      nodes.sort((a, b) => a.y - b.y);
-    }
-    if (params.spacing !== void 0) {
-      let currentPos = params.direction === "HORIZONTAL" ? nodes[0].x : nodes[0].y;
-      for (const node of nodes) {
-        if (params.direction === "HORIZONTAL") {
-          node.x = currentPos;
-          currentPos += node.width + params.spacing;
-        } else {
-          node.y = currentPos;
-          currentPos += node.height + params.spacing;
-        }
+    return __async(this, null, function* () {
+      const nodeMap = yield findNodesAsync(params.nodeIds);
+      const nodes = params.nodeIds.map((id) => nodeMap.get(id)).filter((n) => n !== void 0);
+      if (nodes.length < 2) {
+        throw new Error("Need at least 2 nodes to distribute");
       }
-    } else {
-      const first = nodes[0];
-      const last = nodes[nodes.length - 1];
       if (params.direction === "HORIZONTAL") {
-        const totalWidth = last.x + last.width - first.x;
-        const nodesWidth = nodes.reduce((sum, n) => sum + n.width, 0);
-        const gap = (totalWidth - nodesWidth) / (nodes.length - 1);
-        let currentX = first.x;
+        nodes.sort((a, b) => a.x - b.x);
+      } else {
+        nodes.sort((a, b) => a.y - b.y);
+      }
+      if (params.spacing !== void 0) {
+        let currentPos = params.direction === "HORIZONTAL" ? nodes[0].x : nodes[0].y;
         for (const node of nodes) {
-          node.x = currentX;
-          currentX += node.width + gap;
+          if (params.direction === "HORIZONTAL") {
+            node.x = currentPos;
+            currentPos += node.width + params.spacing;
+          } else {
+            node.y = currentPos;
+            currentPos += node.height + params.spacing;
+          }
         }
       } else {
-        const totalHeight = last.y + last.height - first.y;
-        const nodesHeight = nodes.reduce((sum, n) => sum + n.height, 0);
-        const gap = (totalHeight - nodesHeight) / (nodes.length - 1);
-        let currentY = first.y;
-        for (const node of nodes) {
-          node.y = currentY;
-          currentY += node.height + gap;
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        if (params.direction === "HORIZONTAL") {
+          const totalWidth = last.x + last.width - first.x;
+          const nodesWidth = nodes.reduce((sum, n) => sum + n.width, 0);
+          const gap = (totalWidth - nodesWidth) / (nodes.length - 1);
+          let currentX = first.x;
+          for (const node of nodes) {
+            node.x = currentX;
+            currentX += node.width + gap;
+          }
+        } else {
+          const totalHeight = last.y + last.height - first.y;
+          const nodesHeight = nodes.reduce((sum, n) => sum + n.height, 0);
+          const gap = (totalHeight - nodesHeight) / (nodes.length - 1);
+          let currentY = first.y;
+          for (const node of nodes) {
+            node.y = currentY;
+            currentY += node.height + gap;
+          }
         }
       }
-    }
-    return {
-      success: true,
-      distributedCount: nodes.length,
-      direction: params.direction
-    };
+      return {
+        success: true,
+        distributedCount: nodes.length,
+        direction: params.direction
+      };
+    });
   }
   function setOpacity(params) {
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    node.opacity = Math.max(0, Math.min(1, params.opacity));
-    return {
-      success: true,
-      nodeId: node.id,
-      opacity: node.opacity
-    };
+    return __async(this, null, function* () {
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      node.opacity = Math.max(0, Math.min(1, params.opacity));
+      return {
+        success: true,
+        nodeId: node.id,
+        opacity: node.opacity
+      };
+    });
   }
   function addEffect(params) {
-    var _a, _b, _c, _d, _e;
-    const node = findNode(params.nodeId);
-    if (!node) {
-      throw new Error("Node not found");
-    }
-    if (!("effects" in node)) {
-      throw new Error("Node does not support effects");
-    }
-    let effect;
-    if (params.type === "DROP_SHADOW" || params.type === "INNER_SHADOW") {
-      effect = {
-        type: params.type,
-        color: (_a = params.color) != null ? _a : { r: 0, g: 0, b: 0, a: 0.25 },
-        offset: (_b = params.offset) != null ? _b : { x: 0, y: 4 },
-        radius: (_c = params.radius) != null ? _c : 8,
-        spread: (_d = params.spread) != null ? _d : 0,
-        visible: true,
-        blendMode: "NORMAL"
+    return __async(this, null, function* () {
+      var _a, _b, _c, _d, _e;
+      const node = yield findNodeAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if (!("effects" in node)) {
+        throw new Error("Node does not support effects");
+      }
+      let effect;
+      if (params.type === "DROP_SHADOW" || params.type === "INNER_SHADOW") {
+        effect = {
+          type: params.type,
+          color: (_a = params.color) != null ? _a : { r: 0, g: 0, b: 0, a: 0.25 },
+          offset: (_b = params.offset) != null ? _b : { x: 0, y: 4 },
+          radius: (_c = params.radius) != null ? _c : 8,
+          spread: (_d = params.spread) != null ? _d : 0,
+          visible: true,
+          blendMode: "NORMAL"
+        };
+      } else {
+        effect = {
+          type: params.type,
+          radius: (_e = params.radius) != null ? _e : 8,
+          visible: true
+        };
+      }
+      const blendNode = node;
+      blendNode.effects = [...blendNode.effects, effect];
+      return {
+        success: true,
+        nodeId: node.id,
+        effectType: params.type,
+        effectCount: blendNode.effects.length
       };
-    } else {
-      effect = {
-        type: params.type,
-        radius: (_e = params.radius) != null ? _e : 8,
-        visible: true
-      };
-    }
-    const blendNode = node;
-    blendNode.effects = [...blendNode.effects, effect];
-    return {
-      success: true,
-      nodeId: node.id,
-      effectType: params.type,
-      effectCount: blendNode.effects.length
-    };
+    });
   }
   function setTextStyle(params) {
     return __async(this, null, function* () {
-      const node = findNode(params.nodeId);
+      const node = yield findNodeAsync(params.nodeId);
       if (!node) {
         throw new Error("Node not found");
       }
@@ -781,7 +821,7 @@
       textNode.fontSize = size.fontSize;
       textNode.fills = [{ type: "SOLID", color: textColor }];
       frame.appendChild(textNode);
-      const parent = getParent(params.parentId);
+      const parent = yield getParentAsync(params.parentId);
       parent.appendChild(frame);
       return {
         success: true,
@@ -924,7 +964,7 @@
         footer.layoutSizingVertical = "HUG";
         createdIds.footerId = footer.id;
       }
-      const parent = getParent(params.parentId);
+      const parent = yield getParentAsync(params.parentId);
       parent.appendChild(card);
       return __spreadProps(__spreadValues({
         success: true
@@ -1005,7 +1045,7 @@
       createdIds.placeholderTextId = placeholderText.id;
       container.appendChild(inputFrame);
       createdIds.inputFrameId = inputFrame.id;
-      const parent = getParent(params.parentId);
+      const parent = yield getParentAsync(params.parentId);
       parent.appendChild(container);
       return __spreadProps(__spreadValues({
         success: true
@@ -1111,34 +1151,47 @@
   }
   function findNodesFunc(params) {
     return __async(this, null, function* () {
-      const parent = params.parentId ? yield figma.getNodeByIdAsync(params.parentId) : figma.currentPage;
-      if (!parent || !("findAll" in parent)) {
-        throw new Error("Parent node not found or cannot contain children");
+      let searchRoots = [];
+      if (params.parentId) {
+        const parent = yield figma.getNodeByIdAsync(params.parentId);
+        if (!parent || !("findAll" in parent)) {
+          throw new Error("Parent node not found or cannot contain children");
+        }
+        searchRoots = [parent];
+      } else if (params.scopeToSelection !== false && figma.currentPage.selection.length > 0) {
+        searchRoots = figma.currentPage.selection;
+      } else {
+        searchRoots = [figma.currentPage];
       }
       const maxResults = params.maxResults || 100;
       const results = [];
-      parent.findAll((node) => {
-        var _a;
-        if (results.length >= maxResults) return false;
-        if (params.type && node.type !== params.type) return false;
-        if (params.name && node.name !== params.name) return false;
-        if (params.nameContains && !node.name.includes(params.nameContains)) return false;
-        const sceneNode = node;
-        results.push({
-          id: node.id,
-          name: node.name,
-          type: node.type,
-          parentId: ((_a = node.parent) == null ? void 0 : _a.id) || null,
-          position: { x: sceneNode.x, y: sceneNode.y },
-          size: { width: sceneNode.width, height: sceneNode.height }
+      for (const root of searchRoots) {
+        if (results.length >= maxResults) break;
+        if (!("findAll" in root)) continue;
+        root.findAll((node) => {
+          var _a;
+          if (results.length >= maxResults) return false;
+          if (params.type && node.type !== params.type) return false;
+          if (params.name && node.name !== params.name) return false;
+          if (params.nameContains && !node.name.includes(params.nameContains)) return false;
+          const sceneNode = node;
+          results.push({
+            id: node.id,
+            name: node.name,
+            type: node.type,
+            parentId: ((_a = node.parent) == null ? void 0 : _a.id) || null,
+            position: { x: sceneNode.x, y: sceneNode.y },
+            size: { width: sceneNode.width, height: sceneNode.height }
+          });
+          return false;
         });
-        return false;
-      });
+      }
       return {
         success: true,
         nodes: results,
         count: results.length,
-        truncated: results.length >= maxResults
+        truncated: results.length >= maxResults,
+        scopedToSelection: params.scopeToSelection !== false && !params.parentId && figma.currentPage.selection.length > 0
       };
     });
   }
@@ -1179,9 +1232,171 @@
       };
     });
   }
+  var lastOperationSnapshot = [];
+  function undoLastOperation() {
+    return __async(this, null, function* () {
+      if (lastOperationSnapshot.length === 0) {
+        return {
+          success: false,
+          error: "No operation to undo"
+        };
+      }
+      const results = [];
+      for (const snapshot of lastOperationSnapshot) {
+        try {
+          const node = yield figma.getNodeByIdAsync(snapshot.nodeId);
+          if (!node) {
+            results.push({ nodeId: snapshot.nodeId, property: snapshot.property, success: false, error: "Node not found" });
+            continue;
+          }
+          const sceneNode = node;
+          switch (snapshot.property) {
+            case "fills":
+              if ("fills" in sceneNode) {
+                sceneNode.fills = snapshot.previousValue;
+              }
+              break;
+            case "strokes":
+              if ("strokes" in sceneNode) {
+                sceneNode.strokes = snapshot.previousValue;
+              }
+              break;
+            case "strokeWeight":
+              if ("strokeWeight" in sceneNode) {
+                sceneNode.strokeWeight = snapshot.previousValue;
+              }
+              break;
+            case "opacity":
+              sceneNode.opacity = snapshot.previousValue;
+              break;
+            case "cornerRadius":
+              if ("cornerRadius" in sceneNode) {
+                sceneNode.cornerRadius = snapshot.previousValue;
+              }
+              break;
+            case "visible":
+              sceneNode.visible = snapshot.previousValue;
+              break;
+            case "fontSize":
+              if (sceneNode.type === "TEXT") {
+                const textNode = sceneNode;
+                yield ensureFontLoaded(textNode.fontName);
+                textNode.fontSize = snapshot.previousValue;
+              }
+              break;
+            case "fontName":
+              if (sceneNode.type === "TEXT") {
+                const textNode = sceneNode;
+                yield ensureFontLoaded(snapshot.previousValue);
+                textNode.fontName = snapshot.previousValue;
+              }
+              break;
+            case "textAlignHorizontal":
+              if (sceneNode.type === "TEXT") {
+                sceneNode.textAlignHorizontal = snapshot.previousValue;
+              }
+              break;
+            case "letterSpacing":
+              if (sceneNode.type === "TEXT") {
+                sceneNode.letterSpacing = snapshot.previousValue;
+              }
+              break;
+            case "lineHeight":
+              if (sceneNode.type === "TEXT") {
+                sceneNode.lineHeight = snapshot.previousValue;
+              }
+              break;
+            case "textDecoration":
+              if (sceneNode.type === "TEXT") {
+                sceneNode.textDecoration = snapshot.previousValue;
+              }
+              break;
+            case "textCase":
+              if (sceneNode.type === "TEXT") {
+                sceneNode.textCase = snapshot.previousValue;
+              }
+              break;
+            case "x":
+              sceneNode.x = snapshot.previousValue;
+              break;
+            case "y":
+              sceneNode.y = snapshot.previousValue;
+              break;
+            case "width":
+            case "height":
+              if ("resize" in sceneNode) {
+                const frameNode = sceneNode;
+                if (snapshot.property === "width") {
+                  frameNode.resize(snapshot.previousValue, frameNode.height);
+                } else {
+                  frameNode.resize(frameNode.width, snapshot.previousValue);
+                }
+              }
+              break;
+            case "rotation":
+              if ("rotation" in sceneNode) {
+                sceneNode.rotation = snapshot.previousValue;
+              }
+              break;
+            case "layoutSizingHorizontal":
+              if ("layoutSizingHorizontal" in sceneNode) {
+                sceneNode.layoutSizingHorizontal = snapshot.previousValue;
+              }
+              break;
+            case "layoutSizingVertical":
+              if ("layoutSizingVertical" in sceneNode) {
+                sceneNode.layoutSizingVertical = snapshot.previousValue;
+              }
+              break;
+            case "paddingTop":
+            case "paddingRight":
+            case "paddingBottom":
+            case "paddingLeft":
+            case "itemSpacing":
+              if (snapshot.property in sceneNode) {
+                sceneNode[snapshot.property] = snapshot.previousValue;
+              }
+              break;
+            case "effects":
+              if ("effects" in sceneNode) {
+                sceneNode.effects = snapshot.previousValue;
+              }
+              break;
+            default:
+              results.push({ nodeId: snapshot.nodeId, property: snapshot.property, success: false, error: "Unknown property" });
+              continue;
+          }
+          results.push({ nodeId: snapshot.nodeId, property: snapshot.property, success: true });
+        } catch (e) {
+          results.push({
+            nodeId: snapshot.nodeId,
+            property: snapshot.property,
+            success: false,
+            error: e instanceof Error ? e.message : String(e)
+          });
+        }
+      }
+      const restoredCount = results.filter((r) => r.success).length;
+      lastOperationSnapshot = [];
+      return {
+        success: true,
+        results,
+        restoredCount,
+        failedCount: results.filter((r) => !r.success).length
+      };
+    });
+  }
+  var shadowPresets = {
+    small: { offset: { x: 0, y: 1 }, blur: 2, spread: 0, color: { r: 0, g: 0, b: 0, a: 0.1 } },
+    medium: { offset: { x: 0, y: 4 }, blur: 8, spread: 0, color: { r: 0, g: 0, b: 0, a: 0.15 } },
+    large: { offset: { x: 0, y: 8 }, blur: 16, spread: -2, color: { r: 0, g: 0, b: 0, a: 0.2 } },
+    xl: { offset: { x: 0, y: 16 }, blur: 32, spread: -4, color: { r: 0, g: 0, b: 0, a: 0.25 } }
+  };
   function bulkModify(params) {
     return __async(this, null, function* () {
+      var _a, _b;
       const results = [];
+      const snapshots = [];
       for (const nodeId of params.nodeIds) {
         try {
           const node = yield figma.getNodeByIdAsync(nodeId);
@@ -1191,6 +1406,7 @@
           }
           const sceneNode = node;
           if (params.changes.fillColor && "fills" in sceneNode) {
+            snapshots.push({ nodeId, property: "fills", previousValue: sceneNode.fills });
             if ("setFillStyleIdAsync" in sceneNode) {
               yield sceneNode.setFillStyleIdAsync("");
             }
@@ -1199,21 +1415,182 @@
             ];
           }
           if (params.changes.strokeColor && "strokes" in sceneNode) {
+            snapshots.push({ nodeId, property: "strokes", previousValue: sceneNode.strokes });
             sceneNode.strokes = [
               { type: "SOLID", color: params.changes.strokeColor }
             ];
           }
           if (params.changes.strokeWeight !== void 0 && "strokeWeight" in sceneNode) {
+            snapshots.push({ nodeId, property: "strokeWeight", previousValue: sceneNode.strokeWeight });
             sceneNode.strokeWeight = params.changes.strokeWeight;
           }
           if (params.changes.opacity !== void 0) {
+            snapshots.push({ nodeId, property: "opacity", previousValue: sceneNode.opacity });
             sceneNode.opacity = params.changes.opacity;
           }
           if (params.changes.cornerRadius !== void 0 && "cornerRadius" in sceneNode) {
+            snapshots.push({ nodeId, property: "cornerRadius", previousValue: sceneNode.cornerRadius });
             sceneNode.cornerRadius = params.changes.cornerRadius;
           }
           if (params.changes.visible !== void 0) {
+            snapshots.push({ nodeId, property: "visible", previousValue: sceneNode.visible });
             sceneNode.visible = params.changes.visible;
+          }
+          if (sceneNode.type === "TEXT") {
+            const textNode = sceneNode;
+            if ((params.changes.fontFamily || params.changes.fontWeight || params.changes.fontSize || params.changes.textAlign || params.changes.letterSpacing || params.changes.lineHeight || params.changes.textDecoration || params.changes.textCase) && "setTextStyleIdAsync" in textNode) {
+              yield textNode.setTextStyleIdAsync("");
+            }
+            if (params.changes.fontSize !== void 0) {
+              snapshots.push({ nodeId, property: "fontSize", previousValue: textNode.fontSize });
+              yield ensureFontLoaded(textNode.fontName);
+              textNode.fontSize = params.changes.fontSize;
+            }
+            if (params.changes.fontFamily !== void 0 || params.changes.fontWeight !== void 0) {
+              const currentFont = textNode.fontName;
+              snapshots.push({ nodeId, property: "fontName", previousValue: currentFont });
+              const newFont = {
+                family: (_a = params.changes.fontFamily) != null ? _a : currentFont.family,
+                style: (_b = params.changes.fontWeight) != null ? _b : currentFont.style
+              };
+              yield ensureFontLoaded(newFont);
+              textNode.fontName = newFont;
+            }
+            if (params.changes.textAlign !== void 0) {
+              snapshots.push({ nodeId, property: "textAlignHorizontal", previousValue: textNode.textAlignHorizontal });
+              textNode.textAlignHorizontal = params.changes.textAlign;
+            }
+            if (params.changes.letterSpacing !== void 0) {
+              snapshots.push({ nodeId, property: "letterSpacing", previousValue: textNode.letterSpacing });
+              textNode.letterSpacing = { value: params.changes.letterSpacing, unit: "PIXELS" };
+            }
+            if (params.changes.lineHeight !== void 0) {
+              snapshots.push({ nodeId, property: "lineHeight", previousValue: textNode.lineHeight });
+              if (params.changes.lineHeight < 10) {
+                textNode.lineHeight = { value: params.changes.lineHeight * 100, unit: "PERCENT" };
+              } else {
+                textNode.lineHeight = { value: params.changes.lineHeight, unit: "PIXELS" };
+              }
+            }
+            if (params.changes.textDecoration !== void 0) {
+              snapshots.push({ nodeId, property: "textDecoration", previousValue: textNode.textDecoration });
+              textNode.textDecoration = params.changes.textDecoration;
+            }
+            if (params.changes.textCase !== void 0) {
+              snapshots.push({ nodeId, property: "textCase", previousValue: textNode.textCase });
+              textNode.textCase = params.changes.textCase;
+            }
+          }
+          if (params.changes.x !== void 0) {
+            snapshots.push({ nodeId, property: "x", previousValue: sceneNode.x });
+            sceneNode.x = params.changes.x;
+          }
+          if (params.changes.y !== void 0) {
+            snapshots.push({ nodeId, property: "y", previousValue: sceneNode.y });
+            sceneNode.y = params.changes.y;
+          }
+          if (params.changes.rotation !== void 0 && "rotation" in sceneNode) {
+            snapshots.push({ nodeId, property: "rotation", previousValue: sceneNode.rotation });
+            sceneNode.rotation = params.changes.rotation;
+          }
+          if (params.changes.width !== void 0 && "resize" in sceneNode) {
+            const frameNode = sceneNode;
+            if (typeof params.changes.width === "number") {
+              snapshots.push({ nodeId, property: "width", previousValue: frameNode.width });
+              frameNode.resize(params.changes.width, frameNode.height);
+            } else if (params.changes.width === "hug" && "layoutSizingHorizontal" in frameNode) {
+              snapshots.push({ nodeId, property: "layoutSizingHorizontal", previousValue: frameNode.layoutSizingHorizontal });
+              frameNode.layoutSizingHorizontal = "HUG";
+            } else if (params.changes.width === "fill" && "layoutSizingHorizontal" in frameNode) {
+              snapshots.push({ nodeId, property: "layoutSizingHorizontal", previousValue: frameNode.layoutSizingHorizontal });
+              frameNode.layoutSizingHorizontal = "FILL";
+            }
+          }
+          if (params.changes.height !== void 0 && "resize" in sceneNode) {
+            const frameNode = sceneNode;
+            if (typeof params.changes.height === "number") {
+              snapshots.push({ nodeId, property: "height", previousValue: frameNode.height });
+              frameNode.resize(frameNode.width, params.changes.height);
+            } else if (params.changes.height === "hug" && "layoutSizingVertical" in frameNode) {
+              snapshots.push({ nodeId, property: "layoutSizingVertical", previousValue: frameNode.layoutSizingVertical });
+              frameNode.layoutSizingVertical = "HUG";
+            } else if (params.changes.height === "fill" && "layoutSizingVertical" in frameNode) {
+              snapshots.push({ nodeId, property: "layoutSizingVertical", previousValue: frameNode.layoutSizingVertical });
+              frameNode.layoutSizingVertical = "FILL";
+            }
+          }
+          if ("paddingTop" in sceneNode) {
+            const frameNode = sceneNode;
+            if (params.changes.paddingTop !== void 0) {
+              snapshots.push({ nodeId, property: "paddingTop", previousValue: frameNode.paddingTop });
+              frameNode.paddingTop = params.changes.paddingTop;
+            }
+            if (params.changes.paddingRight !== void 0) {
+              snapshots.push({ nodeId, property: "paddingRight", previousValue: frameNode.paddingRight });
+              frameNode.paddingRight = params.changes.paddingRight;
+            }
+            if (params.changes.paddingBottom !== void 0) {
+              snapshots.push({ nodeId, property: "paddingBottom", previousValue: frameNode.paddingBottom });
+              frameNode.paddingBottom = params.changes.paddingBottom;
+            }
+            if (params.changes.paddingLeft !== void 0) {
+              snapshots.push({ nodeId, property: "paddingLeft", previousValue: frameNode.paddingLeft });
+              frameNode.paddingLeft = params.changes.paddingLeft;
+            }
+            if (params.changes.itemSpacing !== void 0) {
+              snapshots.push({ nodeId, property: "itemSpacing", previousValue: frameNode.itemSpacing });
+              frameNode.itemSpacing = params.changes.itemSpacing;
+            }
+          }
+          if (params.changes.flipHorizontal !== void 0 || params.changes.flipVertical !== void 0) {
+            const currentTransform = "relativeTransform" in sceneNode ? [...sceneNode.relativeTransform] : [[1, 0, 0], [0, 1, 0]];
+            if (params.changes.flipHorizontal) {
+              currentTransform[0][0] *= -1;
+            }
+            if (params.changes.flipVertical) {
+              currentTransform[1][1] *= -1;
+            }
+            if ("relativeTransform" in sceneNode) {
+              sceneNode.relativeTransform = currentTransform;
+            }
+          }
+          if ("effects" in sceneNode) {
+            const blendNode = sceneNode;
+            if ((params.changes.clearEffects || params.changes.addDropShadow || params.changes.addBlur) && "setEffectStyleIdAsync" in blendNode) {
+              yield blendNode.setEffectStyleIdAsync("");
+            }
+            if (params.changes.clearEffects) {
+              snapshots.push({ nodeId, property: "effects", previousValue: blendNode.effects });
+              blendNode.effects = [];
+            }
+            if (params.changes.addDropShadow) {
+              snapshots.push({ nodeId, property: "effects", previousValue: [...blendNode.effects] });
+              let shadowConfig;
+              if (typeof params.changes.addDropShadow === "string") {
+                shadowConfig = shadowPresets[params.changes.addDropShadow];
+              } else {
+                shadowConfig = params.changes.addDropShadow;
+              }
+              const shadowEffect = {
+                type: "DROP_SHADOW",
+                color: shadowConfig.color,
+                offset: shadowConfig.offset,
+                radius: shadowConfig.blur,
+                spread: shadowConfig.spread,
+                visible: true,
+                blendMode: "NORMAL"
+              };
+              blendNode.effects = [...blendNode.effects, shadowEffect];
+            }
+            if (params.changes.addBlur !== void 0) {
+              snapshots.push({ nodeId, property: "effects", previousValue: [...blendNode.effects] });
+              const blurEffect = {
+                type: "LAYER_BLUR",
+                radius: params.changes.addBlur,
+                visible: true
+              };
+              blendNode.effects = [...blendNode.effects, blurEffect];
+            }
           }
           results.push({ nodeId, success: true });
         } catch (e) {
@@ -1224,6 +1601,7 @@
           });
         }
       }
+      lastOperationSnapshot = snapshots;
       return {
         success: true,
         results,
@@ -1395,6 +1773,347 @@
       };
     });
   }
+  function setTextRange(params) {
+    return __async(this, null, function* () {
+      var _a, _b;
+      const node = yield figma.getNodeByIdAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if (node.type !== "TEXT") {
+        throw new Error("Node is not a text node");
+      }
+      const textNode = node;
+      const { start, end, properties } = params;
+      if (start < 0 || end > textNode.characters.length || start >= end) {
+        throw new Error(`Invalid range: start=${start}, end=${end}, textLength=${textNode.characters.length}`);
+      }
+      if ("setTextStyleIdAsync" in textNode) {
+        yield textNode.setTextStyleIdAsync("");
+      }
+      if (properties.fontSize !== void 0) {
+        const currentFont = textNode.getRangeFontName(start, end);
+        if (currentFont !== figma.mixed) {
+          yield ensureFontLoaded(currentFont);
+        }
+        textNode.setRangeFontSize(start, end, properties.fontSize);
+      }
+      if (properties.fontFamily !== void 0 || properties.fontWeight !== void 0) {
+        const currentFont = textNode.getRangeFontName(start, end);
+        let baseFont;
+        if (currentFont === figma.mixed) {
+          baseFont = { family: "Inter", style: "Regular" };
+        } else {
+          baseFont = currentFont;
+        }
+        const newFont = {
+          family: (_a = properties.fontFamily) != null ? _a : baseFont.family,
+          style: (_b = properties.fontWeight) != null ? _b : baseFont.style
+        };
+        yield ensureFontLoaded(newFont);
+        textNode.setRangeFontName(start, end, newFont);
+      }
+      if (properties.fillColor !== void 0) {
+        textNode.setRangeFills(start, end, [
+          { type: "SOLID", color: properties.fillColor }
+        ]);
+      }
+      if (properties.textDecoration !== void 0) {
+        textNode.setRangeTextDecoration(start, end, properties.textDecoration);
+      }
+      if (properties.letterSpacing !== void 0) {
+        textNode.setRangeLetterSpacing(start, end, { value: properties.letterSpacing, unit: "PIXELS" });
+      }
+      return {
+        success: true,
+        nodeId: textNode.id,
+        range: { start, end },
+        appliedProperties: Object.keys(properties)
+      };
+    });
+  }
+  function addShadowPreset(params) {
+    return __async(this, null, function* () {
+      const node = yield figma.getNodeByIdAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if (!("effects" in node)) {
+        throw new Error("Node does not support effects");
+      }
+      const blendNode = node;
+      if ("setEffectStyleIdAsync" in blendNode) {
+        yield blendNode.setEffectStyleIdAsync("");
+      }
+      const config = shadowPresets[params.preset];
+      const shadowEffect = {
+        type: "DROP_SHADOW",
+        color: config.color,
+        offset: config.offset,
+        radius: config.blur,
+        spread: config.spread,
+        visible: true,
+        blendMode: "NORMAL"
+      };
+      blendNode.effects = [...blendNode.effects, shadowEffect];
+      return {
+        success: true,
+        nodeId: node.id,
+        preset: params.preset,
+        effectCount: blendNode.effects.length
+      };
+    });
+  }
+  function clearEffects(params) {
+    return __async(this, null, function* () {
+      var _a;
+      const node = yield figma.getNodeByIdAsync(params.nodeId);
+      if (!node) {
+        throw new Error("Node not found");
+      }
+      if (!("effects" in node)) {
+        throw new Error("Node does not support effects");
+      }
+      const blendNode = node;
+      if ("setEffectStyleIdAsync" in blendNode) {
+        yield blendNode.setEffectStyleIdAsync("");
+      }
+      const previousCount = blendNode.effects.length;
+      if (params.type) {
+        blendNode.effects = blendNode.effects.filter((e) => e.type !== params.type);
+      } else {
+        blendNode.effects = [];
+      }
+      return {
+        success: true,
+        nodeId: node.id,
+        clearedType: (_a = params.type) != null ? _a : "ALL",
+        previousCount,
+        newCount: blendNode.effects.length
+      };
+    });
+  }
+  function colorsMatch(c1, c2, tolerance) {
+    return Math.abs(c1.r - c2.r) <= tolerance && Math.abs(c1.g - c2.g) <= tolerance && Math.abs(c1.b - c2.b) <= tolerance;
+  }
+  function findByColor(params) {
+    return __async(this, null, function* () {
+      var _a, _b, _c;
+      const tolerance = (_a = params.tolerance) != null ? _a : 0.1;
+      const searchFills = params.searchFills !== false;
+      const searchStrokes = (_b = params.searchStrokes) != null ? _b : false;
+      const maxResults = (_c = params.maxResults) != null ? _c : 100;
+      let searchRoots = [];
+      if (params.parentId) {
+        const parent = yield figma.getNodeByIdAsync(params.parentId);
+        if (!parent || !("findAll" in parent)) {
+          throw new Error("Parent node not found or cannot contain children");
+        }
+        searchRoots = [parent];
+      } else if (params.scopeToSelection !== false && figma.currentPage.selection.length > 0) {
+        searchRoots = figma.currentPage.selection;
+      } else {
+        searchRoots = [figma.currentPage];
+      }
+      const results = [];
+      for (const root of searchRoots) {
+        if (results.length >= maxResults) break;
+        if (!("findAll" in root)) continue;
+        root.findAll((node) => {
+          if (results.length >= maxResults) return false;
+          if (searchFills && "fills" in node) {
+            const fills = node.fills;
+            if (Array.isArray(fills)) {
+              for (const fill of fills) {
+                if (fill.type === "SOLID" && colorsMatch(fill.color, params.color, tolerance)) {
+                  results.push({
+                    id: node.id,
+                    name: node.name,
+                    type: node.type,
+                    matchType: "fill",
+                    matchedColor: fill.color
+                  });
+                  return false;
+                }
+              }
+            }
+          }
+          if (searchStrokes && "strokes" in node) {
+            const strokes = node.strokes;
+            if (Array.isArray(strokes)) {
+              for (const stroke of strokes) {
+                if (stroke.type === "SOLID" && colorsMatch(stroke.color, params.color, tolerance)) {
+                  results.push({
+                    id: node.id,
+                    name: node.name,
+                    type: node.type,
+                    matchType: "stroke",
+                    matchedColor: stroke.color
+                  });
+                  return false;
+                }
+              }
+            }
+          }
+          return false;
+        });
+      }
+      return {
+        success: true,
+        nodes: results,
+        count: results.length,
+        searchedColor: params.color,
+        scopedToSelection: params.scopeToSelection !== false && !params.parentId && figma.currentPage.selection.length > 0,
+        tolerance,
+        truncated: results.length >= maxResults
+      };
+    });
+  }
+  function findByFont(params) {
+    return __async(this, null, function* () {
+      var _a;
+      const maxResults = (_a = params.maxResults) != null ? _a : 100;
+      let searchRoots = [];
+      if (params.parentId) {
+        const parent = yield figma.getNodeByIdAsync(params.parentId);
+        if (!parent || !("findAll" in parent)) {
+          throw new Error("Parent node not found or cannot contain children");
+        }
+        searchRoots = [parent];
+      } else if (params.scopeToSelection !== false && figma.currentPage.selection.length > 0) {
+        searchRoots = figma.currentPage.selection;
+      } else {
+        searchRoots = [figma.currentPage];
+      }
+      const results = [];
+      for (const root of searchRoots) {
+        if (results.length >= maxResults) break;
+        if (!("findAll" in root)) continue;
+        root.findAll((node) => {
+          if (results.length >= maxResults) return false;
+          if (node.type === "TEXT") {
+            const textNode = node;
+            const fontName = textNode.fontName;
+            const fontSize = textNode.fontSize;
+            if (fontName === figma.mixed) {
+              if (!params.fontFamily && !params.fontWeight) {
+                if (params.fontSize === void 0 || fontSize === params.fontSize || fontSize === figma.mixed) {
+                  results.push({
+                    id: node.id,
+                    name: node.name,
+                    characters: textNode.characters.slice(0, 50) + (textNode.characters.length > 50 ? "..." : ""),
+                    fontFamily: "mixed",
+                    fontWeight: "mixed",
+                    fontSize: fontSize === figma.mixed ? "mixed" : fontSize
+                  });
+                }
+              }
+              return false;
+            }
+            if (params.fontFamily && fontName.family !== params.fontFamily) {
+              return false;
+            }
+            if (params.fontWeight && fontName.style !== params.fontWeight) {
+              return false;
+            }
+            if (params.fontSize !== void 0) {
+              if (fontSize === figma.mixed || fontSize !== params.fontSize) {
+                return false;
+              }
+            }
+            results.push({
+              id: node.id,
+              name: node.name,
+              characters: textNode.characters.slice(0, 50) + (textNode.characters.length > 50 ? "..." : ""),
+              fontFamily: fontName.family,
+              fontWeight: fontName.style,
+              fontSize: fontSize === figma.mixed ? "mixed" : fontSize
+            });
+          }
+          return false;
+        });
+      }
+      return {
+        success: true,
+        nodes: results,
+        count: results.length,
+        scopedToSelection: params.scopeToSelection !== false && !params.parentId && figma.currentPage.selection.length > 0,
+        searchCriteria: {
+          fontFamily: params.fontFamily,
+          fontWeight: params.fontWeight,
+          fontSize: params.fontSize
+        },
+        truncated: results.length >= maxResults
+      };
+    });
+  }
+  function findInstances(params) {
+    return __async(this, null, function* () {
+      var _a;
+      const maxResults = (_a = params.maxResults) != null ? _a : 100;
+      let searchRoots = [];
+      if (params.parentId) {
+        const parent = yield figma.getNodeByIdAsync(params.parentId);
+        if (!parent || !("findAll" in parent)) {
+          throw new Error("Parent node not found or cannot contain children");
+        }
+        searchRoots = [parent];
+      } else if (params.scopeToSelection !== false && figma.currentPage.selection.length > 0) {
+        searchRoots = figma.currentPage.selection;
+      } else {
+        searchRoots = [figma.currentPage];
+      }
+      let targetComponentId = params.componentId;
+      if (!targetComponentId && params.componentName) {
+        const component = figma.currentPage.findOne(
+          (n) => (n.type === "COMPONENT" || n.type === "COMPONENT_SET") && n.name === params.componentName
+        );
+        if (component) {
+          targetComponentId = component.id;
+        }
+      }
+      const results = [];
+      for (const root of searchRoots) {
+        if (results.length >= maxResults) break;
+        if (!("findAll" in root)) continue;
+        root.findAll((node) => {
+          var _a2, _b;
+          if (results.length >= maxResults) return false;
+          if (node.type === "INSTANCE") {
+            const instance = node;
+            const mainComponent = instance.mainComponent;
+            if (targetComponentId) {
+              if (!mainComponent || mainComponent.id !== targetComponentId) {
+                if (!(mainComponent == null ? void 0 : mainComponent.parent) || mainComponent.parent.id !== targetComponentId) {
+                  return false;
+                }
+              }
+            }
+            results.push({
+              id: node.id,
+              name: node.name,
+              mainComponentId: (_a2 = mainComponent == null ? void 0 : mainComponent.id) != null ? _a2 : null,
+              mainComponentName: (_b = mainComponent == null ? void 0 : mainComponent.name) != null ? _b : null,
+              position: { x: instance.x, y: instance.y },
+              size: { width: instance.width, height: instance.height }
+            });
+          }
+          return false;
+        });
+      }
+      return {
+        success: true,
+        scopedToSelection: params.scopeToSelection !== false && !params.parentId && figma.currentPage.selection.length > 0,
+        nodes: results,
+        count: results.length,
+        searchCriteria: {
+          componentId: params.componentId,
+          componentName: params.componentName
+        },
+        truncated: results.length >= maxResults
+      };
+    });
+  }
   var commandHandlers = /* @__PURE__ */ new Map([
     // Creation commands
     ["create_frame", createFrame],
@@ -1451,7 +2170,15 @@
     ["get_tree", getTree],
     ["bulk_modify", bulkModify],
     ["edit_component", editComponent],
-    ["analyze_node", analyzeNode]
+    ["analyze_node", analyzeNode],
+    // New tools (Phases 2-5)
+    ["set_text_range", setTextRange],
+    ["add_shadow_preset", addShadowPreset],
+    ["clear_effects", clearEffects],
+    ["find_by_color", findByColor],
+    ["find_by_font", findByFont],
+    ["find_instances", findInstances],
+    ["undo_last_operation", undoLastOperation]
   ]);
   function createVariants(params) {
     return __async(this, null, function* () {

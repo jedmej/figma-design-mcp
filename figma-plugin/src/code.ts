@@ -36,10 +36,29 @@ async function ensureFontLoaded(font: FontName): Promise<void> {
 // HELPER FUNCTIONS
 // ============================================
 
+// O(1) direct lookup using Figma's getNodeByIdAsync - much faster than findOne() scan
+async function findNodeAsync(nodeId: string): Promise<SceneNode | null> {
+  const node = await figma.getNodeByIdAsync(nodeId);
+  return node as SceneNode | null;
+}
+
+// Legacy sync version - kept for backwards compatibility but deprecated
+// Use findNodeAsync() for better performance
 function findNode(nodeId: string): SceneNode | null {
   return figma.currentPage.findOne((n) => n.id === nodeId) as SceneNode | null;
 }
 
+async function getParentAsync(parentId?: string): Promise<FrameNode | GroupNode | PageNode> {
+  if (parentId) {
+    const parent = await findNodeAsync(parentId);
+    if (parent && "appendChild" in parent) {
+      return parent as FrameNode | GroupNode;
+    }
+  }
+  return figma.currentPage;
+}
+
+// Legacy sync version - kept for backwards compatibility
 function getParent(parentId?: string): FrameNode | GroupNode | PageNode {
   if (parentId) {
     const parent = findNode(parentId);
@@ -50,7 +69,20 @@ function getParent(parentId?: string): FrameNode | GroupNode | PageNode {
   return figma.currentPage;
 }
 
-// Bulk node lookup for multi-node operations
+// O(k) parallel async bulk lookup - much faster than O(n) page scan
+async function findNodesAsync(nodeIds: string[]): Promise<Map<string, SceneNode>> {
+  const nodeMap = new Map<string, SceneNode>();
+  const nodes = await Promise.all(
+    nodeIds.map(id => figma.getNodeByIdAsync(id))
+  );
+  nodes.forEach((node, i) => {
+    if (node) nodeMap.set(nodeIds[i], node as SceneNode);
+  });
+  return nodeMap;
+}
+
+// Legacy sync version - kept for backwards compatibility but deprecated
+// Use findNodesAsync() for better performance
 function findNodes(nodeIds: string[]): Map<string, SceneNode> {
   const nodeMap = new Map<string, SceneNode>();
   const idSet = new Set(nodeIds);
@@ -86,7 +118,7 @@ async function createFrame(params: {
     frame.fills = [{ type: "SOLID", color: params.fillColor }];
   }
 
-  const parent = getParent(params.parentId);
+  const parent = await getParentAsync(params.parentId);
   parent.appendChild(frame);
 
   return {
@@ -126,7 +158,7 @@ async function createText(params: {
     textNode.fills = [{ type: "SOLID", color: params.fillColor }];
   }
 
-  const parent = getParent(params.parentId);
+  const parent = await getParentAsync(params.parentId);
   parent.appendChild(textNode);
 
   return {
@@ -162,7 +194,7 @@ async function createRectangle(params: {
     rect.fills = [{ type: "SOLID", color: params.fillColor }];
   }
 
-  const parent = getParent(params.parentId);
+  const parent = await getParentAsync(params.parentId);
   parent.appendChild(rect);
 
   return {
@@ -195,7 +227,7 @@ async function createEllipse(params: {
     ellipse.fills = [{ type: "SOLID", color: params.fillColor }];
   }
 
-  const parent = getParent(params.parentId);
+  const parent = await getParentAsync(params.parentId);
   parent.appendChild(ellipse);
 
   return {
@@ -216,7 +248,7 @@ async function setAutoLayout(params: {
   alignment?: "MIN" | "CENTER" | "MAX";
   counterAlignment?: "MIN" | "CENTER" | "MAX";
 }) {
-  const node = findNode(params.nodeId);
+  const node = await findNodeAsync(params.nodeId);
   if (!node || node.type !== "FRAME") {
     throw new Error("Node not found or not a frame");
   }
@@ -253,7 +285,7 @@ async function createComponent(params: {
   let component: ComponentNode;
 
   if (params.fromNodeId) {
-    const node = findNode(params.fromNodeId);
+    const node = await findNodeAsync(params.fromNodeId);
     if (!node) {
       throw new Error("Node not found");
     }
@@ -313,7 +345,7 @@ async function createInstance(params: {
   y?: number;
   parentId?: string;
 }) {
-  const component = findNode(params.componentId);
+  const component = await findNodeAsync(params.componentId);
   if (!component || component.type !== "COMPONENT") {
     throw new Error("Component not found");
   }
@@ -323,7 +355,7 @@ async function createInstance(params: {
   instance.y = params.y ?? 0;
 
   if (params.parentId) {
-    const parent = getParent(params.parentId);
+    const parent = await getParentAsync(params.parentId);
     parent.appendChild(instance);
   }
 
@@ -336,11 +368,11 @@ async function createInstance(params: {
   };
 }
 
-function listNodes(params: { parentId?: string }) {
+async function listNodes(params: { parentId?: string }) {
   let nodes: readonly SceneNode[];
 
   if (params.parentId) {
-    const parent = findNode(params.parentId);
+    const parent = await findNodeAsync(params.parentId);
     if (parent && "children" in parent) {
       nodes = (parent as FrameNode | GroupNode).children;
     } else {
@@ -365,8 +397,8 @@ function listNodes(params: { parentId?: string }) {
   };
 }
 
-function deleteNode(params: { nodeId: string }) {
-  const node = findNode(params.nodeId);
+async function deleteNode(params: { nodeId: string }) {
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -381,8 +413,8 @@ function deleteNode(params: { nodeId: string }) {
   };
 }
 
-function moveNode(params: { nodeId: string; x: number; y: number }) {
-  const node = findNode(params.nodeId);
+async function moveNode(params: { nodeId: string; x: number; y: number }) {
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -397,8 +429,8 @@ function moveNode(params: { nodeId: string; x: number; y: number }) {
   };
 }
 
-function resizeNode(params: { nodeId: string; width: number; height: number }) {
-  const node = findNode(params.nodeId);
+async function resizeNode(params: { nodeId: string; width: number; height: number }) {
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -443,12 +475,12 @@ async function setFillColor(params: {
   };
 }
 
-function addStroke(params: {
+async function addStroke(params: {
   nodeId: string;
   color: { r: number; g: number; b: number };
   weight?: number;
 }) {
-  const node = findNode(params.nodeId);
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -482,8 +514,8 @@ function getSelection() {
   };
 }
 
-function setSelection(params: { nodeIds: string[] }) {
-  const nodeMap = findNodes(params.nodeIds);
+async function setSelection(params: { nodeIds: string[] }) {
+  const nodeMap = await findNodesAsync(params.nodeIds);
   const nodes = params.nodeIds
     .map((id) => nodeMap.get(id))
     .filter((n): n is SceneNode => n !== undefined);
@@ -496,11 +528,11 @@ function setSelection(params: { nodeIds: string[] }) {
   };
 }
 
-function zoomToFit(params: { nodeIds?: string[] }) {
+async function zoomToFit(params: { nodeIds?: string[] }) {
   let nodes: readonly SceneNode[];
 
   if (params.nodeIds && params.nodeIds.length > 0) {
-    const nodeMap = findNodes(params.nodeIds);
+    const nodeMap = await findNodesAsync(params.nodeIds);
     nodes = params.nodeIds
       .map((id) => nodeMap.get(id))
       .filter((n): n is SceneNode => n !== undefined);
@@ -518,8 +550,8 @@ function zoomToFit(params: { nodeIds?: string[] }) {
   };
 }
 
-function setCornerRadius(params: { nodeId: string; radius: number }) {
-  const node = findNode(params.nodeId);
+async function setCornerRadius(params: { nodeId: string; radius: number }) {
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -537,13 +569,13 @@ function setCornerRadius(params: { nodeId: string; radius: number }) {
   };
 }
 
-function reparentNode(params: { nodeId: string; newParentId: string; index?: number }) {
-  const node = findNode(params.nodeId);
+async function reparentNode(params: { nodeId: string; newParentId: string; index?: number }) {
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
 
-  const newParent = findNode(params.newParentId);
+  const newParent = await findNodeAsync(params.newParentId);
   if (!newParent || !("appendChild" in newParent)) {
     throw new Error("New parent not found or cannot contain children");
   }
@@ -564,12 +596,12 @@ function reparentNode(params: { nodeId: string; newParentId: string; index?: num
   };
 }
 
-function setSizingMode(params: {
+async function setSizingMode(params: {
   nodeId: string;
   horizontal?: "FIXED" | "FILL" | "HUG";
   vertical?: "FIXED" | "FILL" | "HUG";
 }) {
-  const node = findNode(params.nodeId);
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -596,7 +628,7 @@ function setSizingMode(params: {
 }
 
 async function setText(params: { nodeId: string; text: string }) {
-  const node = findNode(params.nodeId);
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -616,12 +648,12 @@ async function setText(params: { nodeId: string; text: string }) {
   };
 }
 
-function setConstraints(params: {
+async function setConstraints(params: {
   nodeId: string;
   horizontal?: "MIN" | "CENTER" | "MAX" | "STRETCH" | "SCALE";
   vertical?: "MIN" | "CENTER" | "MAX" | "STRETCH" | "SCALE";
 }) {
-  const node = findNode(params.nodeId);
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -640,8 +672,8 @@ function setConstraints(params: {
   };
 }
 
-function duplicateNode(params: { nodeId: string; offsetX?: number; offsetY?: number }) {
-  const node = findNode(params.nodeId);
+async function duplicateNode(params: { nodeId: string; offsetX?: number; offsetY?: number }) {
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -659,8 +691,8 @@ function duplicateNode(params: { nodeId: string; offsetX?: number; offsetY?: num
   };
 }
 
-function groupNodes(params: { nodeIds: string[]; name?: string }) {
-  const nodeMap = findNodes(params.nodeIds);
+async function groupNodes(params: { nodeIds: string[]; name?: string }) {
+  const nodeMap = await findNodesAsync(params.nodeIds);
   const nodes = params.nodeIds
     .map((id) => nodeMap.get(id))
     .filter((n): n is SceneNode => n !== undefined);
@@ -680,11 +712,11 @@ function groupNodes(params: { nodeIds: string[]; name?: string }) {
   };
 }
 
-function alignNodes(params: {
+async function alignNodes(params: {
   nodeIds: string[];
   alignment: "LEFT" | "CENTER_H" | "RIGHT" | "TOP" | "CENTER_V" | "BOTTOM";
 }) {
-  const nodeMap = findNodes(params.nodeIds);
+  const nodeMap = await findNodesAsync(params.nodeIds);
   const nodes = params.nodeIds
     .map((id) => nodeMap.get(id))
     .filter((n): n is SceneNode => n !== undefined);
@@ -734,12 +766,12 @@ function alignNodes(params: {
   };
 }
 
-function distributeNodes(params: {
+async function distributeNodes(params: {
   nodeIds: string[];
   direction: "HORIZONTAL" | "VERTICAL";
   spacing?: number;
 }) {
-  const nodeMap = findNodes(params.nodeIds);
+  const nodeMap = await findNodesAsync(params.nodeIds);
   const nodes = params.nodeIds
     .map((id) => nodeMap.get(id))
     .filter((n): n is SceneNode => n !== undefined);
@@ -799,8 +831,8 @@ function distributeNodes(params: {
   };
 }
 
-function setOpacity(params: { nodeId: string; opacity: number }) {
-  const node = findNode(params.nodeId);
+async function setOpacity(params: { nodeId: string; opacity: number }) {
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -814,7 +846,7 @@ function setOpacity(params: { nodeId: string; opacity: number }) {
   };
 }
 
-function addEffect(params: {
+async function addEffect(params: {
   nodeId: string;
   type: "DROP_SHADOW" | "INNER_SHADOW" | "LAYER_BLUR" | "BACKGROUND_BLUR";
   color?: { r: number; g: number; b: number; a: number };
@@ -822,7 +854,7 @@ function addEffect(params: {
   radius?: number;
   spread?: number;
 }) {
-  const node = findNode(params.nodeId);
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -869,7 +901,7 @@ async function setTextStyle(params: {
   letterSpacing?: number;
   textDecoration?: "NONE" | "UNDERLINE" | "STRIKETHROUGH";
 }) {
-  const node = findNode(params.nodeId);
+  const node = await findNodeAsync(params.nodeId);
   if (!node) {
     throw new Error("Node not found");
   }
@@ -983,7 +1015,7 @@ async function createButton(params: {
 
   frame.appendChild(textNode);
 
-  const parent = getParent(params.parentId);
+  const parent = await getParentAsync(params.parentId);
   parent.appendChild(frame);
 
   return {
@@ -1160,7 +1192,7 @@ async function createCard(params: {
     createdIds.footerId = footer.id;
   }
 
-  const parent = getParent(params.parentId);
+  const parent = await getParentAsync(params.parentId);
   parent.appendChild(card);
 
   return {
@@ -1263,7 +1295,7 @@ async function createInput(params: {
   container.appendChild(inputFrame);
   createdIds.inputFrameId = inputFrame.id;
 
-  const parent = getParent(params.parentId);
+  const parent = await getParentAsync(params.parentId);
   parent.appendChild(container);
 
   return {
@@ -1416,13 +1448,22 @@ async function findNodesFunc(params: {
   nameContains?: string;
   parentId?: string;
   maxResults?: number;
+  scopeToSelection?: boolean;
 }) {
-  const parent = params.parentId
-    ? await figma.getNodeByIdAsync(params.parentId)
-    : figma.currentPage;
+  // Determine search root: parentId > scopeToSelection > entire page
+  let searchRoots: BaseNode[] = [];
 
-  if (!parent || !("findAll" in parent)) {
-    throw new Error("Parent node not found or cannot contain children");
+  if (params.parentId) {
+    const parent = await figma.getNodeByIdAsync(params.parentId);
+    if (!parent || !("findAll" in parent)) {
+      throw new Error("Parent node not found or cannot contain children");
+    }
+    searchRoots = [parent];
+  } else if (params.scopeToSelection !== false && figma.currentPage.selection.length > 0) {
+    // Default to selection for better performance on large files
+    searchRoots = figma.currentPage.selection;
+  } else {
+    searchRoots = [figma.currentPage];
   }
 
   const maxResults = params.maxResults || 100;
@@ -1435,36 +1476,43 @@ async function findNodesFunc(params: {
     size: { width: number; height: number };
   }> = [];
 
-  (parent as ChildrenMixin).findAll((node) => {
-    if (results.length >= maxResults) return false;
+  for (const root of searchRoots) {
+    if (results.length >= maxResults) break;
 
-    // Filter by type
-    if (params.type && node.type !== params.type) return false;
+    if (!("findAll" in root)) continue;
 
-    // Filter by exact name
-    if (params.name && node.name !== params.name) return false;
+    (root as ChildrenMixin).findAll((node) => {
+      if (results.length >= maxResults) return false;
 
-    // Filter by name contains
-    if (params.nameContains && !node.name.includes(params.nameContains)) return false;
+      // Filter by type
+      if (params.type && node.type !== params.type) return false;
 
-    const sceneNode = node as SceneNode;
-    results.push({
-      id: node.id,
-      name: node.name,
-      type: node.type,
-      parentId: node.parent?.id || null,
-      position: { x: sceneNode.x, y: sceneNode.y },
-      size: { width: sceneNode.width, height: sceneNode.height },
+      // Filter by exact name
+      if (params.name && node.name !== params.name) return false;
+
+      // Filter by name contains
+      if (params.nameContains && !node.name.includes(params.nameContains)) return false;
+
+      const sceneNode = node as SceneNode;
+      results.push({
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        parentId: node.parent?.id || null,
+        position: { x: sceneNode.x, y: sceneNode.y },
+        size: { width: sceneNode.width, height: sceneNode.height },
+      });
+
+      return false; // Continue searching
     });
-
-    return false; // Continue searching
-  });
+  }
 
   return {
     success: true,
     nodes: results,
     count: results.length,
     truncated: results.length >= maxResults,
+    scopedToSelection: params.scopeToSelection !== false && !params.parentId && figma.currentPage.selection.length > 0,
   };
 }
 
@@ -1527,18 +1575,229 @@ async function getTree(params: {
 // BULK MODIFY - Apply changes to multiple nodes
 // ============================================
 
+// ============================================
+// UNDO SUPPORT - Store snapshots before changes
+// ============================================
+
+interface PropertySnapshot {
+  nodeId: string;
+  property: string;
+  previousValue: any;
+}
+
+let lastOperationSnapshot: PropertySnapshot[] = [];
+
+async function undoLastOperation() {
+  if (lastOperationSnapshot.length === 0) {
+    return {
+      success: false,
+      error: "No operation to undo",
+    };
+  }
+
+  const results: Array<{ nodeId: string; property: string; success: boolean; error?: string }> = [];
+
+  for (const snapshot of lastOperationSnapshot) {
+    try {
+      const node = await figma.getNodeByIdAsync(snapshot.nodeId);
+      if (!node) {
+        results.push({ nodeId: snapshot.nodeId, property: snapshot.property, success: false, error: "Node not found" });
+        continue;
+      }
+
+      const sceneNode = node as SceneNode;
+
+      // Restore the previous value based on property type
+      switch (snapshot.property) {
+        case "fills":
+          if ("fills" in sceneNode) {
+            (sceneNode as GeometryMixin).fills = snapshot.previousValue;
+          }
+          break;
+        case "strokes":
+          if ("strokes" in sceneNode) {
+            (sceneNode as GeometryMixin).strokes = snapshot.previousValue;
+          }
+          break;
+        case "strokeWeight":
+          if ("strokeWeight" in sceneNode) {
+            (sceneNode as GeometryMixin).strokeWeight = snapshot.previousValue;
+          }
+          break;
+        case "opacity":
+          sceneNode.opacity = snapshot.previousValue;
+          break;
+        case "cornerRadius":
+          if ("cornerRadius" in sceneNode) {
+            (sceneNode as RectangleNode).cornerRadius = snapshot.previousValue;
+          }
+          break;
+        case "visible":
+          sceneNode.visible = snapshot.previousValue;
+          break;
+        case "fontSize":
+          if (sceneNode.type === "TEXT") {
+            const textNode = sceneNode as TextNode;
+            await ensureFontLoaded(textNode.fontName as FontName);
+            textNode.fontSize = snapshot.previousValue;
+          }
+          break;
+        case "fontName":
+          if (sceneNode.type === "TEXT") {
+            const textNode = sceneNode as TextNode;
+            await ensureFontLoaded(snapshot.previousValue);
+            textNode.fontName = snapshot.previousValue;
+          }
+          break;
+        case "textAlignHorizontal":
+          if (sceneNode.type === "TEXT") {
+            (sceneNode as TextNode).textAlignHorizontal = snapshot.previousValue;
+          }
+          break;
+        case "letterSpacing":
+          if (sceneNode.type === "TEXT") {
+            (sceneNode as TextNode).letterSpacing = snapshot.previousValue;
+          }
+          break;
+        case "lineHeight":
+          if (sceneNode.type === "TEXT") {
+            (sceneNode as TextNode).lineHeight = snapshot.previousValue;
+          }
+          break;
+        case "textDecoration":
+          if (sceneNode.type === "TEXT") {
+            (sceneNode as TextNode).textDecoration = snapshot.previousValue;
+          }
+          break;
+        case "textCase":
+          if (sceneNode.type === "TEXT") {
+            (sceneNode as TextNode).textCase = snapshot.previousValue;
+          }
+          break;
+        case "x":
+          sceneNode.x = snapshot.previousValue;
+          break;
+        case "y":
+          sceneNode.y = snapshot.previousValue;
+          break;
+        case "width":
+        case "height":
+          if ("resize" in sceneNode) {
+            const frameNode = sceneNode as FrameNode;
+            if (snapshot.property === "width") {
+              frameNode.resize(snapshot.previousValue, frameNode.height);
+            } else {
+              frameNode.resize(frameNode.width, snapshot.previousValue);
+            }
+          }
+          break;
+        case "rotation":
+          if ("rotation" in sceneNode) {
+            (sceneNode as any).rotation = snapshot.previousValue;
+          }
+          break;
+        case "layoutSizingHorizontal":
+          if ("layoutSizingHorizontal" in sceneNode) {
+            (sceneNode as FrameNode).layoutSizingHorizontal = snapshot.previousValue;
+          }
+          break;
+        case "layoutSizingVertical":
+          if ("layoutSizingVertical" in sceneNode) {
+            (sceneNode as FrameNode).layoutSizingVertical = snapshot.previousValue;
+          }
+          break;
+        case "paddingTop":
+        case "paddingRight":
+        case "paddingBottom":
+        case "paddingLeft":
+        case "itemSpacing":
+          if (snapshot.property in sceneNode) {
+            (sceneNode as any)[snapshot.property] = snapshot.previousValue;
+          }
+          break;
+        case "effects":
+          if ("effects" in sceneNode) {
+            (sceneNode as BlendMixin).effects = snapshot.previousValue;
+          }
+          break;
+        default:
+          results.push({ nodeId: snapshot.nodeId, property: snapshot.property, success: false, error: "Unknown property" });
+          continue;
+      }
+
+      results.push({ nodeId: snapshot.nodeId, property: snapshot.property, success: true });
+    } catch (e) {
+      results.push({
+        nodeId: snapshot.nodeId,
+        property: snapshot.property,
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  // Clear the snapshot after undo
+  const restoredCount = results.filter(r => r.success).length;
+  lastOperationSnapshot = [];
+
+  return {
+    success: true,
+    results,
+    restoredCount,
+    failedCount: results.filter(r => !r.success).length,
+  };
+}
+
+// Shadow presets
+const shadowPresets = {
+  small: { offset: { x: 0, y: 1 }, blur: 2, spread: 0, color: { r: 0, g: 0, b: 0, a: 0.1 } },
+  medium: { offset: { x: 0, y: 4 }, blur: 8, spread: 0, color: { r: 0, g: 0, b: 0, a: 0.15 } },
+  large: { offset: { x: 0, y: 8 }, blur: 16, spread: -2, color: { r: 0, g: 0, b: 0, a: 0.2 } },
+  xl: { offset: { x: 0, y: 16 }, blur: 32, spread: -4, color: { r: 0, g: 0, b: 0, a: 0.25 } },
+};
+
 async function bulkModify(params: {
   nodeIds: string[];
   changes: {
+    // Original properties
     fillColor?: { r: number; g: number; b: number };
     strokeColor?: { r: number; g: number; b: number };
     strokeWeight?: number;
     opacity?: number;
     cornerRadius?: number;
     visible?: boolean;
+    fontSize?: number;
+    // Text properties (Phase 1.1)
+    fontFamily?: string;
+    fontWeight?: string;
+    textAlign?: "LEFT" | "CENTER" | "RIGHT" | "JUSTIFIED";
+    letterSpacing?: number;
+    lineHeight?: number;
+    textDecoration?: "NONE" | "UNDERLINE" | "STRIKETHROUGH";
+    textCase?: "ORIGINAL" | "UPPER" | "LOWER" | "TITLE";
+    // Layout properties (Phase 1.2)
+    width?: number | "hug" | "fill";
+    height?: number | "hug" | "fill";
+    x?: number;
+    y?: number;
+    rotation?: number;
+    // Auto-layout properties (Phase 1.3)
+    paddingTop?: number;
+    paddingRight?: number;
+    paddingBottom?: number;
+    paddingLeft?: number;
+    itemSpacing?: number;
+    // Transform properties (Phase 1.4)
+    flipHorizontal?: boolean;
+    flipVertical?: boolean;
+    // Effects (Phase 3.3)
+    clearEffects?: boolean;
+    addDropShadow?: "small" | "medium" | "large" | "xl" | { color: { r: number; g: number; b: number; a: number }; offset: { x: number; y: number }; blur: number; spread: number };
+    addBlur?: number;
   };
 }) {
   const results: Array<{ nodeId: string; success: boolean; error?: string }> = [];
+  const snapshots: PropertySnapshot[] = [];
 
   for (const nodeId of params.nodeIds) {
     try {
@@ -1552,6 +1811,7 @@ async function bulkModify(params: {
 
       // Apply fill color
       if (params.changes.fillColor && "fills" in sceneNode) {
+        snapshots.push({ nodeId, property: "fills", previousValue: (sceneNode as GeometryMixin).fills });
         // Clear any bound fill style first (use async method)
         if ("setFillStyleIdAsync" in sceneNode) {
           await (sceneNode as any).setFillStyleIdAsync("");
@@ -1563,6 +1823,7 @@ async function bulkModify(params: {
 
       // Apply stroke color
       if (params.changes.strokeColor && "strokes" in sceneNode) {
+        snapshots.push({ nodeId, property: "strokes", previousValue: (sceneNode as GeometryMixin).strokes });
         (sceneNode as GeometryMixin).strokes = [
           { type: "SOLID", color: params.changes.strokeColor },
         ];
@@ -1570,22 +1831,252 @@ async function bulkModify(params: {
 
       // Apply stroke weight
       if (params.changes.strokeWeight !== undefined && "strokeWeight" in sceneNode) {
+        snapshots.push({ nodeId, property: "strokeWeight", previousValue: (sceneNode as GeometryMixin).strokeWeight });
         (sceneNode as GeometryMixin).strokeWeight = params.changes.strokeWeight;
       }
 
       // Apply opacity
       if (params.changes.opacity !== undefined) {
+        snapshots.push({ nodeId, property: "opacity", previousValue: sceneNode.opacity });
         sceneNode.opacity = params.changes.opacity;
       }
 
       // Apply corner radius
       if (params.changes.cornerRadius !== undefined && "cornerRadius" in sceneNode) {
+        snapshots.push({ nodeId, property: "cornerRadius", previousValue: (sceneNode as RectangleNode).cornerRadius });
         (sceneNode as RectangleNode).cornerRadius = params.changes.cornerRadius;
       }
 
       // Apply visibility
       if (params.changes.visible !== undefined) {
+        snapshots.push({ nodeId, property: "visible", previousValue: sceneNode.visible });
         sceneNode.visible = params.changes.visible;
+      }
+
+      // ============================================
+      // TEXT PROPERTIES (Phase 1.1)
+      // ============================================
+      if (sceneNode.type === "TEXT") {
+        const textNode = sceneNode as TextNode;
+
+        // Clear text style before making text changes
+        if ((params.changes.fontFamily || params.changes.fontWeight || params.changes.fontSize ||
+             params.changes.textAlign || params.changes.letterSpacing || params.changes.lineHeight ||
+             params.changes.textDecoration || params.changes.textCase) && "setTextStyleIdAsync" in textNode) {
+          await (textNode as any).setTextStyleIdAsync("");
+        }
+
+        // Apply font size
+        if (params.changes.fontSize !== undefined) {
+          snapshots.push({ nodeId, property: "fontSize", previousValue: textNode.fontSize });
+          await ensureFontLoaded(textNode.fontName as FontName);
+          textNode.fontSize = params.changes.fontSize;
+        }
+
+        // Apply font family and/or weight
+        if (params.changes.fontFamily !== undefined || params.changes.fontWeight !== undefined) {
+          const currentFont = textNode.fontName as FontName;
+          snapshots.push({ nodeId, property: "fontName", previousValue: currentFont });
+
+          const newFont: FontName = {
+            family: params.changes.fontFamily ?? currentFont.family,
+            style: params.changes.fontWeight ?? currentFont.style,
+          };
+          await ensureFontLoaded(newFont);
+          textNode.fontName = newFont;
+        }
+
+        // Apply text alignment
+        if (params.changes.textAlign !== undefined) {
+          snapshots.push({ nodeId, property: "textAlignHorizontal", previousValue: textNode.textAlignHorizontal });
+          textNode.textAlignHorizontal = params.changes.textAlign;
+        }
+
+        // Apply letter spacing
+        if (params.changes.letterSpacing !== undefined) {
+          snapshots.push({ nodeId, property: "letterSpacing", previousValue: textNode.letterSpacing });
+          textNode.letterSpacing = { value: params.changes.letterSpacing, unit: "PIXELS" };
+        }
+
+        // Apply line height
+        if (params.changes.lineHeight !== undefined) {
+          snapshots.push({ nodeId, property: "lineHeight", previousValue: textNode.lineHeight });
+          if (params.changes.lineHeight < 10) {
+            textNode.lineHeight = { value: params.changes.lineHeight * 100, unit: "PERCENT" };
+          } else {
+            textNode.lineHeight = { value: params.changes.lineHeight, unit: "PIXELS" };
+          }
+        }
+
+        // Apply text decoration
+        if (params.changes.textDecoration !== undefined) {
+          snapshots.push({ nodeId, property: "textDecoration", previousValue: textNode.textDecoration });
+          textNode.textDecoration = params.changes.textDecoration;
+        }
+
+        // Apply text case
+        if (params.changes.textCase !== undefined) {
+          snapshots.push({ nodeId, property: "textCase", previousValue: textNode.textCase });
+          textNode.textCase = params.changes.textCase;
+        }
+      }
+
+      // ============================================
+      // LAYOUT PROPERTIES (Phase 1.2)
+      // ============================================
+
+      // Apply position changes
+      if (params.changes.x !== undefined) {
+        snapshots.push({ nodeId, property: "x", previousValue: sceneNode.x });
+        sceneNode.x = params.changes.x;
+      }
+
+      if (params.changes.y !== undefined) {
+        snapshots.push({ nodeId, property: "y", previousValue: sceneNode.y });
+        sceneNode.y = params.changes.y;
+      }
+
+      // Apply rotation
+      if (params.changes.rotation !== undefined && "rotation" in sceneNode) {
+        snapshots.push({ nodeId, property: "rotation", previousValue: (sceneNode as any).rotation });
+        (sceneNode as any).rotation = params.changes.rotation;
+      }
+
+      // Apply width/height with hug/fill support
+      if (params.changes.width !== undefined && "resize" in sceneNode) {
+        const frameNode = sceneNode as FrameNode;
+        if (typeof params.changes.width === "number") {
+          snapshots.push({ nodeId, property: "width", previousValue: frameNode.width });
+          frameNode.resize(params.changes.width, frameNode.height);
+        } else if (params.changes.width === "hug" && "layoutSizingHorizontal" in frameNode) {
+          snapshots.push({ nodeId, property: "layoutSizingHorizontal", previousValue: frameNode.layoutSizingHorizontal });
+          frameNode.layoutSizingHorizontal = "HUG";
+        } else if (params.changes.width === "fill" && "layoutSizingHorizontal" in frameNode) {
+          snapshots.push({ nodeId, property: "layoutSizingHorizontal", previousValue: frameNode.layoutSizingHorizontal });
+          frameNode.layoutSizingHorizontal = "FILL";
+        }
+      }
+
+      if (params.changes.height !== undefined && "resize" in sceneNode) {
+        const frameNode = sceneNode as FrameNode;
+        if (typeof params.changes.height === "number") {
+          snapshots.push({ nodeId, property: "height", previousValue: frameNode.height });
+          frameNode.resize(frameNode.width, params.changes.height);
+        } else if (params.changes.height === "hug" && "layoutSizingVertical" in frameNode) {
+          snapshots.push({ nodeId, property: "layoutSizingVertical", previousValue: frameNode.layoutSizingVertical });
+          frameNode.layoutSizingVertical = "HUG";
+        } else if (params.changes.height === "fill" && "layoutSizingVertical" in frameNode) {
+          snapshots.push({ nodeId, property: "layoutSizingVertical", previousValue: frameNode.layoutSizingVertical });
+          frameNode.layoutSizingVertical = "FILL";
+        }
+      }
+
+      // ============================================
+      // AUTO-LAYOUT PROPERTIES (Phase 1.3)
+      // ============================================
+      if ("paddingTop" in sceneNode) {
+        const frameNode = sceneNode as FrameNode;
+
+        if (params.changes.paddingTop !== undefined) {
+          snapshots.push({ nodeId, property: "paddingTop", previousValue: frameNode.paddingTop });
+          frameNode.paddingTop = params.changes.paddingTop;
+        }
+        if (params.changes.paddingRight !== undefined) {
+          snapshots.push({ nodeId, property: "paddingRight", previousValue: frameNode.paddingRight });
+          frameNode.paddingRight = params.changes.paddingRight;
+        }
+        if (params.changes.paddingBottom !== undefined) {
+          snapshots.push({ nodeId, property: "paddingBottom", previousValue: frameNode.paddingBottom });
+          frameNode.paddingBottom = params.changes.paddingBottom;
+        }
+        if (params.changes.paddingLeft !== undefined) {
+          snapshots.push({ nodeId, property: "paddingLeft", previousValue: frameNode.paddingLeft });
+          frameNode.paddingLeft = params.changes.paddingLeft;
+        }
+        if (params.changes.itemSpacing !== undefined) {
+          snapshots.push({ nodeId, property: "itemSpacing", previousValue: frameNode.itemSpacing });
+          frameNode.itemSpacing = params.changes.itemSpacing;
+        }
+      }
+
+      // ============================================
+      // TRANSFORM PROPERTIES (Phase 1.4)
+      // ============================================
+      if (params.changes.flipHorizontal !== undefined || params.changes.flipVertical !== undefined) {
+        // Figma uses a transformation matrix for flipping
+        // Get current transform or use identity
+        const currentTransform = "relativeTransform" in sceneNode
+          ? [...(sceneNode as LayoutMixin).relativeTransform]
+          : [[1, 0, 0], [0, 1, 0]] as Transform;
+
+        if (params.changes.flipHorizontal) {
+          // Flip horizontally by negating the x scale
+          currentTransform[0][0] *= -1;
+        }
+        if (params.changes.flipVertical) {
+          // Flip vertically by negating the y scale
+          currentTransform[1][1] *= -1;
+        }
+
+        if ("relativeTransform" in sceneNode) {
+          (sceneNode as LayoutMixin).relativeTransform = currentTransform as Transform;
+        }
+      }
+
+      // ============================================
+      // EFFECTS (Phase 3.3)
+      // ============================================
+      if ("effects" in sceneNode) {
+        const blendNode = sceneNode as BlendMixin;
+
+        // Clear effect style before making effect changes
+        if ((params.changes.clearEffects || params.changes.addDropShadow || params.changes.addBlur) &&
+            "setEffectStyleIdAsync" in blendNode) {
+          await (blendNode as any).setEffectStyleIdAsync("");
+        }
+
+        // Clear all effects
+        if (params.changes.clearEffects) {
+          snapshots.push({ nodeId, property: "effects", previousValue: blendNode.effects });
+          blendNode.effects = [];
+        }
+
+        // Add drop shadow (preset or custom)
+        if (params.changes.addDropShadow) {
+          snapshots.push({ nodeId, property: "effects", previousValue: [...blendNode.effects] });
+
+          let shadowConfig: typeof shadowPresets.small;
+          if (typeof params.changes.addDropShadow === "string") {
+            shadowConfig = shadowPresets[params.changes.addDropShadow];
+          } else {
+            shadowConfig = params.changes.addDropShadow;
+          }
+
+          const shadowEffect: DropShadowEffect = {
+            type: "DROP_SHADOW",
+            color: shadowConfig.color,
+            offset: shadowConfig.offset,
+            radius: shadowConfig.blur,
+            spread: shadowConfig.spread,
+            visible: true,
+            blendMode: "NORMAL",
+          };
+
+          blendNode.effects = [...blendNode.effects, shadowEffect];
+        }
+
+        // Add blur
+        if (params.changes.addBlur !== undefined) {
+          snapshots.push({ nodeId, property: "effects", previousValue: [...blendNode.effects] });
+
+          const blurEffect: BlurEffect = {
+            type: "LAYER_BLUR",
+            radius: params.changes.addBlur,
+            visible: true,
+          };
+
+          blendNode.effects = [...blendNode.effects, blurEffect];
+        }
       }
 
       results.push({ nodeId, success: true });
@@ -1597,6 +2088,9 @@ async function bulkModify(params: {
       });
     }
   }
+
+  // Store snapshots for undo
+  lastOperationSnapshot = snapshots;
 
   return {
     success: true,
@@ -1828,6 +2322,507 @@ async function analyzeNode(params: { nodeId: string }) {
 }
 
 // ============================================
+// SET TEXT RANGE - Range-based text styling (Phase 2)
+// ============================================
+
+async function setTextRange(params: {
+  nodeId: string;
+  start: number;
+  end: number;
+  properties: {
+    fontSize?: number;
+    fontFamily?: string;
+    fontWeight?: string;
+    fillColor?: { r: number; g: number; b: number };
+    textDecoration?: "NONE" | "UNDERLINE" | "STRIKETHROUGH";
+    letterSpacing?: number;
+  };
+}) {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
+  if (!node) {
+    throw new Error("Node not found");
+  }
+
+  if (node.type !== "TEXT") {
+    throw new Error("Node is not a text node");
+  }
+
+  const textNode = node as TextNode;
+  const { start, end, properties } = params;
+
+  // Validate range
+  if (start < 0 || end > textNode.characters.length || start >= end) {
+    throw new Error(`Invalid range: start=${start}, end=${end}, textLength=${textNode.characters.length}`);
+  }
+
+  // Clear text style for the range before making changes
+  if ("setTextStyleIdAsync" in textNode) {
+    await (textNode as any).setTextStyleIdAsync("");
+  }
+
+  // Apply font size to range
+  if (properties.fontSize !== undefined) {
+    // Need to load fonts for all segments first
+    const currentFont = textNode.getRangeFontName(start, end);
+    if (currentFont !== figma.mixed) {
+      await ensureFontLoaded(currentFont);
+    }
+    textNode.setRangeFontSize(start, end, properties.fontSize);
+  }
+
+  // Apply font family/weight to range
+  if (properties.fontFamily !== undefined || properties.fontWeight !== undefined) {
+    const currentFont = textNode.getRangeFontName(start, end);
+    let baseFont: FontName;
+    if (currentFont === figma.mixed) {
+      baseFont = { family: "Inter", style: "Regular" };
+    } else {
+      baseFont = currentFont;
+    }
+
+    const newFont: FontName = {
+      family: properties.fontFamily ?? baseFont.family,
+      style: properties.fontWeight ?? baseFont.style,
+    };
+    await ensureFontLoaded(newFont);
+    textNode.setRangeFontName(start, end, newFont);
+  }
+
+  // Apply fill color to range
+  if (properties.fillColor !== undefined) {
+    textNode.setRangeFills(start, end, [
+      { type: "SOLID", color: properties.fillColor },
+    ]);
+  }
+
+  // Apply text decoration to range
+  if (properties.textDecoration !== undefined) {
+    textNode.setRangeTextDecoration(start, end, properties.textDecoration);
+  }
+
+  // Apply letter spacing to range
+  if (properties.letterSpacing !== undefined) {
+    textNode.setRangeLetterSpacing(start, end, { value: properties.letterSpacing, unit: "PIXELS" });
+  }
+
+  return {
+    success: true,
+    nodeId: textNode.id,
+    range: { start, end },
+    appliedProperties: Object.keys(properties),
+  };
+}
+
+// ============================================
+// SHADOW PRESETS (Phase 3.1)
+// ============================================
+
+async function addShadowPreset(params: {
+  nodeId: string;
+  preset: "small" | "medium" | "large" | "xl";
+}) {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
+  if (!node) {
+    throw new Error("Node not found");
+  }
+
+  if (!("effects" in node)) {
+    throw new Error("Node does not support effects");
+  }
+
+  const blendNode = node as SceneNode & BlendMixin;
+
+  // Clear effect style before making changes
+  if ("setEffectStyleIdAsync" in blendNode) {
+    await (blendNode as any).setEffectStyleIdAsync("");
+  }
+
+  const config = shadowPresets[params.preset];
+  const shadowEffect: DropShadowEffect = {
+    type: "DROP_SHADOW",
+    color: config.color,
+    offset: config.offset,
+    radius: config.blur,
+    spread: config.spread,
+    visible: true,
+    blendMode: "NORMAL",
+  };
+
+  blendNode.effects = [...blendNode.effects, shadowEffect];
+
+  return {
+    success: true,
+    nodeId: node.id,
+    preset: params.preset,
+    effectCount: blendNode.effects.length,
+  };
+}
+
+// ============================================
+// CLEAR EFFECTS (Phase 3.2)
+// ============================================
+
+async function clearEffects(params: {
+  nodeId: string;
+  type?: "DROP_SHADOW" | "INNER_SHADOW" | "LAYER_BLUR" | "BACKGROUND_BLUR";
+}) {
+  const node = await figma.getNodeByIdAsync(params.nodeId);
+  if (!node) {
+    throw new Error("Node not found");
+  }
+
+  if (!("effects" in node)) {
+    throw new Error("Node does not support effects");
+  }
+
+  const blendNode = node as SceneNode & BlendMixin;
+
+  // Clear effect style before making changes
+  if ("setEffectStyleIdAsync" in blendNode) {
+    await (blendNode as any).setEffectStyleIdAsync("");
+  }
+
+  const previousCount = blendNode.effects.length;
+
+  if (params.type) {
+    // Clear only specific effect type
+    blendNode.effects = blendNode.effects.filter(e => e.type !== params.type);
+  } else {
+    // Clear all effects
+    blendNode.effects = [];
+  }
+
+  return {
+    success: true,
+    nodeId: node.id,
+    clearedType: params.type ?? "ALL",
+    previousCount,
+    newCount: blendNode.effects.length,
+  };
+}
+
+// ============================================
+// SMART SEARCH TOOLS (Phase 4)
+// ============================================
+
+// Helper function to compare colors with tolerance
+function colorsMatch(
+  c1: { r: number; g: number; b: number },
+  c2: { r: number; g: number; b: number },
+  tolerance: number
+): boolean {
+  return (
+    Math.abs(c1.r - c2.r) <= tolerance &&
+    Math.abs(c1.g - c2.g) <= tolerance &&
+    Math.abs(c1.b - c2.b) <= tolerance
+  );
+}
+
+// Find by color (Phase 4.1)
+async function findByColor(params: {
+  color: { r: number; g: number; b: number };
+  tolerance?: number;
+  searchFills?: boolean;
+  searchStrokes?: boolean;
+  parentId?: string;
+  maxResults?: number;
+  scopeToSelection?: boolean;
+}) {
+  const tolerance = params.tolerance ?? 0.1;
+  const searchFills = params.searchFills !== false; // default true
+  const searchStrokes = params.searchStrokes ?? false; // default false
+  const maxResults = params.maxResults ?? 100;
+
+  // Determine search roots: parentId > scopeToSelection > entire page
+  let searchRoots: BaseNode[] = [];
+
+  if (params.parentId) {
+    const parent = await figma.getNodeByIdAsync(params.parentId);
+    if (!parent || !("findAll" in parent)) {
+      throw new Error("Parent node not found or cannot contain children");
+    }
+    searchRoots = [parent];
+  } else if (params.scopeToSelection !== false && figma.currentPage.selection.length > 0) {
+    // Default to selection for better performance on large files
+    searchRoots = figma.currentPage.selection;
+  } else {
+    searchRoots = [figma.currentPage];
+  }
+
+  const results: Array<{
+    id: string;
+    name: string;
+    type: string;
+    matchType: "fill" | "stroke";
+    matchedColor: { r: number; g: number; b: number };
+  }> = [];
+
+  for (const root of searchRoots) {
+    if (results.length >= maxResults) break;
+    if (!("findAll" in root)) continue;
+
+    (root as ChildrenMixin).findAll((node) => {
+      if (results.length >= maxResults) return false;
+
+      // Check fills
+      if (searchFills && "fills" in node) {
+        const fills = (node as GeometryMixin).fills;
+        if (Array.isArray(fills)) {
+          for (const fill of fills) {
+            if (fill.type === "SOLID" && colorsMatch(fill.color, params.color, tolerance)) {
+              results.push({
+                id: node.id,
+                name: node.name,
+                type: node.type,
+                matchType: "fill",
+                matchedColor: fill.color,
+              });
+              return false; // Don't add same node twice
+            }
+          }
+        }
+      }
+
+      // Check strokes
+      if (searchStrokes && "strokes" in node) {
+        const strokes = (node as GeometryMixin).strokes;
+        if (Array.isArray(strokes)) {
+          for (const stroke of strokes) {
+            if (stroke.type === "SOLID" && colorsMatch(stroke.color, params.color, tolerance)) {
+              results.push({
+                id: node.id,
+                name: node.name,
+                type: node.type,
+                matchType: "stroke",
+                matchedColor: stroke.color,
+              });
+              return false; // Don't add same node twice
+            }
+          }
+        }
+      }
+
+      return false;
+    });
+  }
+
+  return {
+    success: true,
+    nodes: results,
+    count: results.length,
+    searchedColor: params.color,
+    scopedToSelection: params.scopeToSelection !== false && !params.parentId && figma.currentPage.selection.length > 0,
+    tolerance,
+    truncated: results.length >= maxResults,
+  };
+}
+
+// Find by font (Phase 4.2)
+async function findByFont(params: {
+  fontFamily?: string;
+  fontWeight?: string;
+  fontSize?: number;
+  parentId?: string;
+  maxResults?: number;
+  scopeToSelection?: boolean;
+}) {
+  const maxResults = params.maxResults ?? 100;
+
+  // Determine search roots: parentId > scopeToSelection > entire page
+  let searchRoots: BaseNode[] = [];
+
+  if (params.parentId) {
+    const parent = await figma.getNodeByIdAsync(params.parentId);
+    if (!parent || !("findAll" in parent)) {
+      throw new Error("Parent node not found or cannot contain children");
+    }
+    searchRoots = [parent];
+  } else if (params.scopeToSelection !== false && figma.currentPage.selection.length > 0) {
+    // Default to selection for better performance on large files
+    searchRoots = figma.currentPage.selection;
+  } else {
+    searchRoots = [figma.currentPage];
+  }
+
+  const results: Array<{
+    id: string;
+    name: string;
+    characters: string;
+    fontFamily: string;
+    fontWeight: string;
+    fontSize: number | "mixed";
+  }> = [];
+
+  for (const root of searchRoots) {
+    if (results.length >= maxResults) break;
+    if (!("findAll" in root)) continue;
+
+    (root as ChildrenMixin).findAll((node) => {
+      if (results.length >= maxResults) return false;
+
+      if (node.type === "TEXT") {
+        const textNode = node as TextNode;
+        const fontName = textNode.fontName;
+        const fontSize = textNode.fontSize;
+
+        // Handle mixed fonts
+        if (fontName === figma.mixed) {
+          // Skip nodes with mixed fonts for simplicity, or include if no font filter
+          if (!params.fontFamily && !params.fontWeight) {
+            if (params.fontSize === undefined || fontSize === params.fontSize || fontSize === figma.mixed) {
+              results.push({
+                id: node.id,
+                name: node.name,
+                characters: textNode.characters.slice(0, 50) + (textNode.characters.length > 50 ? "..." : ""),
+                fontFamily: "mixed",
+                fontWeight: "mixed",
+                fontSize: fontSize === figma.mixed ? "mixed" : fontSize,
+              });
+            }
+          }
+          return false;
+        }
+
+        // Check font family
+        if (params.fontFamily && fontName.family !== params.fontFamily) {
+          return false;
+        }
+
+        // Check font weight/style
+        if (params.fontWeight && fontName.style !== params.fontWeight) {
+          return false;
+        }
+
+        // Check font size
+        if (params.fontSize !== undefined) {
+          if (fontSize === figma.mixed || fontSize !== params.fontSize) {
+            return false;
+          }
+        }
+
+        results.push({
+          id: node.id,
+          name: node.name,
+          characters: textNode.characters.slice(0, 50) + (textNode.characters.length > 50 ? "..." : ""),
+          fontFamily: fontName.family,
+          fontWeight: fontName.style,
+          fontSize: fontSize === figma.mixed ? "mixed" : fontSize,
+        });
+      }
+
+      return false;
+    });
+  }
+
+  return {
+    success: true,
+    nodes: results,
+    count: results.length,
+    scopedToSelection: params.scopeToSelection !== false && !params.parentId && figma.currentPage.selection.length > 0,
+    searchCriteria: {
+      fontFamily: params.fontFamily,
+      fontWeight: params.fontWeight,
+      fontSize: params.fontSize,
+    },
+    truncated: results.length >= maxResults,
+  };
+}
+
+// Find instances (Phase 4.3)
+async function findInstances(params: {
+  componentId?: string;
+  componentName?: string;
+  parentId?: string;
+  maxResults?: number;
+  scopeToSelection?: boolean;
+}) {
+  const maxResults = params.maxResults ?? 100;
+
+  // Determine search roots: parentId > scopeToSelection > entire page
+  let searchRoots: BaseNode[] = [];
+
+  if (params.parentId) {
+    const parent = await figma.getNodeByIdAsync(params.parentId);
+    if (!parent || !("findAll" in parent)) {
+      throw new Error("Parent node not found or cannot contain children");
+    }
+    searchRoots = [parent];
+  } else if (params.scopeToSelection !== false && figma.currentPage.selection.length > 0) {
+    // Default to selection for better performance on large files
+    searchRoots = figma.currentPage.selection;
+  } else {
+    searchRoots = [figma.currentPage];
+  }
+
+  // If componentName is provided, find the component first
+  let targetComponentId = params.componentId;
+  if (!targetComponentId && params.componentName) {
+    const component = figma.currentPage.findOne((n) =>
+      (n.type === "COMPONENT" || n.type === "COMPONENT_SET") && n.name === params.componentName
+    );
+    if (component) {
+      targetComponentId = component.id;
+    }
+  }
+
+  const results: Array<{
+    id: string;
+    name: string;
+    mainComponentId: string | null;
+    mainComponentName: string | null;
+    position: { x: number; y: number };
+    size: { width: number; height: number };
+  }> = [];
+
+  for (const root of searchRoots) {
+    if (results.length >= maxResults) break;
+    if (!("findAll" in root)) continue;
+
+    (root as ChildrenMixin).findAll((node) => {
+      if (results.length >= maxResults) return false;
+
+      if (node.type === "INSTANCE") {
+        const instance = node as InstanceNode;
+        const mainComponent = instance.mainComponent;
+
+        // If searching for specific component, filter
+        if (targetComponentId) {
+          if (!mainComponent || mainComponent.id !== targetComponentId) {
+            // Also check if the main component's parent (component set) matches
+            if (!mainComponent?.parent || mainComponent.parent.id !== targetComponentId) {
+              return false;
+            }
+          }
+        }
+
+        results.push({
+          id: node.id,
+          name: node.name,
+          mainComponentId: mainComponent?.id ?? null,
+          mainComponentName: mainComponent?.name ?? null,
+          position: { x: instance.x, y: instance.y },
+          size: { width: instance.width, height: instance.height },
+        });
+      }
+
+      return false;
+    });
+  }
+
+  return {
+    success: true,
+    scopedToSelection: params.scopeToSelection !== false && !params.parentId && figma.currentPage.selection.length > 0,
+    nodes: results,
+    count: results.length,
+    searchCriteria: {
+      componentId: params.componentId,
+      componentName: params.componentName,
+    },
+    truncated: results.length >= maxResults,
+  };
+}
+
+// ============================================
 // HANDLER REGISTRY - O(1) command dispatch
 // ============================================
 
@@ -1902,6 +2897,15 @@ const commandHandlers = new Map<string, CommandHandler>([
   ["bulk_modify", bulkModify],
   ["edit_component", editComponent],
   ["analyze_node", analyzeNode],
+
+  // New tools (Phases 2-5)
+  ["set_text_range", setTextRange],
+  ["add_shadow_preset", addShadowPreset],
+  ["clear_effects", clearEffects],
+  ["find_by_color", findByColor],
+  ["find_by_font", findByFont],
+  ["find_instances", findInstances],
+  ["undo_last_operation", undoLastOperation],
 ]);
 
 // Create a component with variants properly (no conflicts)
